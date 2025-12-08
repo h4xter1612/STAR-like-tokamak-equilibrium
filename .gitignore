@@ -96,10 +96,4 @@ Thumbs.db
 # Archivos generados por el proyecto
 # ----------------------
 
-# Resultados de simulaciones / animaciones (ajusta a tu gusto)
-# results/
-# */results/
-*.mp4
-*.gif
-*.png
 
