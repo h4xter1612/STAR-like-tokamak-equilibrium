@@ -1,0 +1,6 @@
+STAR-like bean – global numbers (approx)
+V_pl   = 1.671474e+03 m^3
+W_p    = 1.017762e+05 J
+<p>    = 6.089007e+01 Pa
+B0_tor = 1.401330e-01 T
+beta_T = 7.793015e-03
