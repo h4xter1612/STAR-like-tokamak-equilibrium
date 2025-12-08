@@ -1,4 +1,4 @@
-"""
+""""
 animate_star_bean.py
 
 Animation of a quasi–static ramp-up of the STAR-like bean equilibrium.
@@ -18,7 +18,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import os
-from tqdm import tqdm  # <- para la barra de progreso
+import sys
+import contextlib
+import warnings
+import tqdm
 
 from freegsnke import equilibrium_update, GSstaticsolver
 from freegsnke.jtor_update import ConstrainPaxisIp
@@ -54,6 +57,21 @@ def set_star_currents(tokamak, CS, PF1, PF2, PF3):
             coil.current = PF3
         else:
             coil.current = 0.0
+
+
+@contextlib.contextmanager
+def suppress_stdout():
+    """
+    Temporarily suppress stdout (e.g. to hide verbose solver messages)
+    without affecting tqdm, which writes to stderr.
+    """
+    with open(os.devnull, "w") as devnull:
+        old_stdout = sys.stdout
+        try:
+            sys.stdout = devnull
+            yield
+        finally:
+            sys.stdout = old_stdout
 
 
 def main():
@@ -162,14 +180,38 @@ def main():
         )
         profiles.diverted_core_mask = np.ones_like(eq.psi(), dtype=bool)
 
-        # Solve using the previous psi as initial guess
-        solver.solve(
-            eq=eq,
-            profiles=profiles,
-            constrain=None,
-            target_relative_tolerance=1e-6,
-            verbose=False,
-        )
+        # ----- Resolver el equilibrio, pero si algo va mal, saltar el frame -----
+        try:
+            with warnings.catch_warnings():
+                # Convertir RuntimeWarning (ej. divide by zero) en excepción
+                warnings.filterwarnings("error", category=RuntimeWarning)
+                # Silenciar stdout del solver
+                with suppress_stdout():
+                    solver.solve(
+                        eq=eq,
+                        profiles=profiles,
+                        constrain=None,
+                        target_relative_tolerance=1e-6,
+                        verbose=False,
+                    )
+        except Exception as exc:
+            # Mensaje amigable sin romper la barra de progreso
+            tqdm.tqdm.write(
+                f"[WARNING] Skipping frame {frame_index} (f={f:.3f}): {exc}"
+            )
+            # Dibujamos algo razonable usando el último estado bueno
+            init_axis()
+            eq.plot(axis=ax, show=False)
+            txt = rf"$f={f:.2f}$ (frame skipped)"
+            ax.text(
+                0.02,
+                0.02,
+                txt,
+                transform=ax.transAxes,
+                fontsize=9,
+                bbox=dict(boxstyle="round", facecolor="white", alpha=0.7),
+            )
+            return []
 
         # Separatrix for this state (if any)
         try:
@@ -236,10 +278,12 @@ def main():
     video = os.path.join(results_dir, "star_bean_ramp_refined.mp4")
 
     # ====== BARRA DE PROGRESO EN EL GUARDADO ======
-    with tqdm(total=N_FRAMES, desc="Guardando animación") as pbar:
+    with tqdm.tqdm(total=N_FRAMES, desc="Guardando animación", file=sys.stderr) as pbar:
         def progress(current_frame, total_frames):
-            # actualizamos +1 cada vez que se llama
-            pbar.update(1)
+            # Ajustamos explícitamente el contador según el frame reportado
+            pbar.total = total_frames
+            pbar.n = current_frame + 1
+            pbar.refresh()
 
         anim.save(
             video,
@@ -255,4 +299,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
+""

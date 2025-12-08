@@ -1,0 +1,105 @@
+# ----------------------
+# Archivos de Python
+# ----------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Byte-compiled / optimized / DLL files
+*.pyo
+*.pyd
+*.so
+
+# ----------------------
+# Entornos virtuales
+# ----------------------
+.env
+.venv
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Virtualenvs en el home (opcional, por si lo tienes dentro del repo)
+.venvs/
+.venvs/*
+
+# ----------------------
+# Distribución / empaquetado
+# ----------------------
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ----------------------
+# Herramientas de test / cobertura
+# ----------------------
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# ----------------------
+# MyPy / type checking / linters
+# ----------------------
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+
+# ----------------------
+# Jupyter Notebooks
+# ----------------------
+.ipynb_checkpoints
+
+# ----------------------
+# Logs
+# ----------------------
+*.log
+
+# ----------------------
+# IDEs / editores
+# ----------------------
+.vscode/
+.idea/
+*.code-workspace
+
+# ----------------------
+# Archivos del sistema
+# ----------------------
+.DS_Store
+Thumbs.db
+
+# ----------------------
+# Archivos generados por el proyecto
+# ----------------------
+
+# Resultados de simulaciones / animaciones (ajusta a tu gusto)
+# results/
+# */results/
+*.mp4
+*.gif
+*.png
+
