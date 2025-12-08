@@ -96,7 +96,7 @@ STAR-like-tokamak-equilibrium/
 │  ├─ STAR_bean_global_numbers.txt    # Compact text summary of key parameters
 │  └─ star_bean_ramp_refined.mp4      # Ramp-up animation (optional)
 │
-├─ report.tex            # Full LaTeX report with equations & detailed derivations
+├─ STAR-like Tokamak.pdf # Full report with equations & detailed derivations
 └─ README.md             # This file
 ```
 
