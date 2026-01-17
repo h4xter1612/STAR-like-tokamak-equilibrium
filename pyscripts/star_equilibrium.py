@@ -21,7 +21,8 @@ import os
 from freegsnke import equilibrium_update, GSstaticsolver
 from freegsnke.jtor_update import ConstrainPaxisIp
 
-from star_machine import make_star_machine
+from star_machine_cad import make_star_machine_from_cad
+# from star_machine import make_star_machine
 from analyze_star_shape import shape_from_separatrix
 import config_star_bean as cfg
 
@@ -75,13 +76,14 @@ def build_equilibrium(verbose: bool = True):
     # -------------------------
     # 1) Geometry and Machine
     # -------------------------
-    tokamak, geom = make_star_machine(
-        R0=cfg.R0_geom,
-        A=cfg.A_geom,
-        kappa=cfg.kappa_geom,
-        delta=cfg.delta_geom,
-    )
-
+    tokamak, geom = make_star_machine_from_cad()
+    # tokamak, geom = make_star_machine(
+    #     R0=cfg.R0_geom,
+    #     A=cfg.A_geom,
+    #     kappa=cfg.kappa_geom,
+    #     delta=cfg.delta_geom,
+    # )
+    #
     # Refined coil currents
     set_star_currents(tokamak)
 

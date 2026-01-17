@@ -60,6 +60,9 @@ REQUIRED_DEPENDENCIES = [
     # Progress / UI helpers
     Dependency("tqdm",       "tqdm"),
 
+    # DXF I/O
+    Dependency("ezdxf",      "ezdxf"),
+
     # FreeGS / FreeGSNKE ecosystem
     # NOTE: if these fail to install from pip, you may need to install them
     # manually from their Git repository or local source.
