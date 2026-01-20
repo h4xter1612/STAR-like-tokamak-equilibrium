@@ -15,6 +15,14 @@ Conventions:
     One rectangle polyline per coil on layers: COIL_CS, COIL_PF1U, COIL_PF1L, ...
   Fallback (legacy, less robust):
     Rectangles on COILS + labels on COIL_LABELS
+
+Stability improvements (CAD-realistic ready):
+  - Sequential duplicate removal / closure enforcement
+  - CCW enforcement for walls (area > 0); if area < 0 reverse
+  - Optional resampling policy: "auto" | "always" | "never"
+  - Canonical start point: outboard midplane (max R, then min |Z|)
+  - POLYLINE vertex API compatibility (list vs callable)
+  - Optional entity flattening via ezdxf.path (if available)
 """
 
 from __future__ import annotations
@@ -28,6 +36,16 @@ import matplotlib.pyplot as plt
 
 from freegs4e import machine
 
+try:
+    import ezdxf
+except Exception:
+    ezdxf = None
+
+try:
+    from ezdxf import path as ezpath
+except Exception:
+    ezpath = None
+
 
 # -----------------------------
 # Config
@@ -39,9 +57,9 @@ class CADLayers:
     wall_inner: str = "WALL_INNER"
     plasma_target: str = "PLASMA_TARGET"
 
-    coil_layer_prefix: str = "COIL_"   # Recommended: COIL_CS, COIL_PF1U, ...
-    coils_layer: str = "COILS"         # Fallback: all rectangles here
-    coil_labels_layer: str = "COIL_LABELS"  # Fallback: text labels here
+    coil_layer_prefix: str = "COIL_"          # Recommended: COIL_CS, COIL_PF1U, ...
+    coils_layer: str = "COILS"                # Fallback: all rectangles here
+    coil_labels_layer: str = "COIL_LABELS"    # Fallback: text labels here
 
 
 @dataclass(frozen=True)
@@ -49,13 +67,26 @@ class CADImportOptions:
     # If unit_scale is None, infer from $INSUNITS. Example: mm -> 1e-3.
     unit_scale: Optional[float] = None
 
-    # For strict retrocompatibility, default is to NOT resample walls (keep vertices as-is).
-    resample_walls: bool = False
+    # Wall resampling policy: "auto" | "always" | "never"
+    # - "auto": resample only if len(points) < min_wall_pts
+    # - "always": always resample to n_wall/n_inner/n_plasma
+    # - "never": keep vertices as-is (strict retrocompat mode)
+    resample_walls: str = "auto"
 
-    # Only used if resample_walls=True
-    n_wall: int = 400
-    n_inner: int = 400
+    # Target points used if resampling is active
+    n_wall: int = 801
+    n_inner: int = 801
     n_plasma: int = 400
+    min_wall_pts: int = 200
+
+    # Enforce CCW orientation for wall polylines (recommended)
+    enforce_ccw: bool = True
+
+    # Rotate start to outboard midplane for consistency (recommended)
+    canonical_start: bool = True
+
+    # Flattening chord-length target (meters) for SPLINE/ARC/ELLIPSE fallback (if ezdxf.path available)
+    flatten_distance: float = 0.01
 
     # Fallback label matching tolerance (legacy mode)
     label_match_factor: float = 2.0  # radius ~ factor * max(dR,dZ)
@@ -69,13 +100,38 @@ def _normalize_label(s: str) -> str:
     return str(s).strip().upper()
 
 
-def _ensure_closed(xy: np.ndarray) -> np.ndarray:
+def _infer_unit_scale_from_insunits(insunits_code: int) -> float:
+    # AutoCAD $INSUNITS: 0=unitless, 1=in, 2=ft, 4=mm, 5=cm, 6=m
+    mapping = {0: 1.0, 1: 0.0254, 2: 0.3048, 4: 1e-3, 5: 1e-2, 6: 1.0}
+    return mapping.get(int(insunits_code), 1.0)
+
+
+def _ensure_closed(xy: np.ndarray, tol: float = 1e-12) -> np.ndarray:
     pts = np.asarray(xy, dtype=float)
     if len(pts) == 0:
         return pts
-    if not np.allclose(pts[0], pts[-1]):
+    if np.linalg.norm(pts[0] - pts[-1]) > tol:
         pts = np.vstack([pts, pts[0]])
     return pts
+
+
+def _drop_duplicate_endpoint(xy: np.ndarray, tol: float = 1e-12) -> np.ndarray:
+    pts = np.asarray(xy, dtype=float)
+    if len(pts) < 2:
+        return pts
+    if np.linalg.norm(pts[0] - pts[-1]) <= tol:
+        return pts[:-1]
+    return pts
+
+
+def _dedupe_sequential(xy: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    pts = np.asarray(xy, dtype=float)
+    if len(pts) <= 1:
+        return pts
+    d = pts[1:] - pts[:-1]
+    keep = np.ones(len(pts), dtype=bool)
+    keep[1:] = (d[:, 0] * d[:, 0] + d[:, 1] * d[:, 1]) > eps * eps
+    return pts[keep]
 
 
 def _polygon_area(xy: np.ndarray) -> float:
@@ -86,11 +142,36 @@ def _polygon_area(xy: np.ndarray) -> float:
     return 0.5 * float(np.sum(x[:-1] * y[1:] - x[1:] * y[:-1]))
 
 
+def _rotate_to_outboard_midplane(xy: np.ndarray) -> np.ndarray:
+    """
+    Rotate closed contour so the first point is at outboard midplane:
+      maximize R, and among ties minimize |Z|.
+    """
+    pts_open = _drop_duplicate_endpoint(xy)
+    if len(pts_open) == 0:
+        return _ensure_closed(pts_open)
+    score = pts_open[:, 0] - 1e-6 * np.abs(pts_open[:, 1])
+    idx = int(np.argmax(score))
+    pts_rot = np.roll(pts_open, -idx, axis=0)
+    return _ensure_closed(pts_rot)
+
+
+def _enforce_ccw(xy: np.ndarray) -> np.ndarray:
+    """
+    Ensure positive signed area (CCW). Keeps closure.
+    """
+    pts_open = _drop_duplicate_endpoint(xy)
+    if _polygon_area(pts_open) < 0:
+        pts_open = pts_open[::-1].copy()
+    return _ensure_closed(pts_open)
+
+
 def _resample_closed_curve(xy: np.ndarray, n: int) -> np.ndarray:
     """
     Uniform arc-length resampling of a closed polyline.
+    Returns a CLOSED polyline (first point repeated at end).
     """
-    pts = _ensure_closed(np.asarray(xy, dtype=float))
+    pts = _ensure_closed(_dedupe_sequential(np.asarray(xy, dtype=float)))
     if len(pts) < 4:
         return pts
 
@@ -101,11 +182,25 @@ def _resample_closed_curve(xy: np.ndarray, n: int) -> np.ndarray:
     if total <= 0:
         return pts
 
-    s_new = np.linspace(0.0, total, n, endpoint=False)
+    s_new = np.linspace(0.0, total, int(n), endpoint=False)
     x_new = np.interp(s_new, s, pts[:, 0])
     y_new = np.interp(s_new, s, pts[:, 1])
     out = np.column_stack([x_new, y_new])
-    return _ensure_closed(out)
+    out = _ensure_closed(_dedupe_sequential(out))
+    return out
+
+
+def _maybe_resample(xy: np.ndarray, n: int, policy: str, min_pts: int) -> np.ndarray:
+    pol = str(policy).strip().lower()
+    pts_open = _drop_duplicate_endpoint(xy)
+    if pol == "never":
+        return _ensure_closed(pts_open)
+    if pol == "always":
+        return _resample_closed_curve(pts_open, n)
+    # auto
+    if len(pts_open) < int(min_pts):
+        return _resample_closed_curve(pts_open, n)
+    return _ensure_closed(pts_open)
 
 
 def _bbox_from_poly(xy: np.ndarray) -> Tuple[float, float, float, float]:
@@ -130,16 +225,10 @@ def _coil_from_rect_poly(xy: np.ndarray) -> Tuple[float, float, float, float]:
     return Rc, Zc, dR, dZ
 
 
-def _infer_unit_scale_from_insunits(insunits_code: int) -> float:
-    # AutoCAD $INSUNITS: 1=in, 2=ft, 4=mm, 5=cm, 6=m
-    mapping = {1: 0.0254, 2: 0.3048, 4: 1e-3, 5: 1e-2, 6: 1.0}
-    return mapping.get(int(insunits_code), 1.0)
-
-
-def _entity_to_xy(entity) -> np.ndarray:
+def _entity_to_xy(entity, opts: CADImportOptions) -> np.ndarray:
     """
     Extract XY vertices from LWPOLYLINE / POLYLINE.
-    Compatible across ezdxf versions where POLYLINE.vertices may be a method or a list.
+    Fallback: flatten via ezdxf.path for SPLINE/ARC/ELLIPSE if available.
     """
     et = entity.dxftype()
 
@@ -148,48 +237,28 @@ def _entity_to_xy(entity) -> np.ndarray:
         return np.array(pts, dtype=float)
 
     if et == "POLYLINE":
-        verts = None
-
-        # ezdxf variant A: entity.vertices is a list-like attribute
-        if hasattr(entity, "vertices") and not callable(getattr(entity, "vertices")):
-            verts = getattr(entity, "vertices")
-
-        # ezdxf variant B: entity.vertices() is a generator method
-        if verts is None and hasattr(entity, "vertices") and callable(getattr(entity, "vertices")):
-            verts = entity.vertices()
-
-        # ezdxf variant C: entity.points() exists
-        if verts is None and hasattr(entity, "points") and callable(getattr(entity, "points")):
-            pts = [(p[0], p[1]) for p in entity.points()]
-            return np.array(pts, dtype=float)
-
+        # ezdxf version differences:
+        #   - entity.vertices() (callable)
+        #   - entity.vertices (list)
+        verts = getattr(entity, "vertices", None)
+        if callable(verts):
+            verts = verts()
         if verts is None:
-            raise ValueError("Unsupported POLYLINE vertex access pattern for your ezdxf version.")
-
-        pts = []
-        for v in verts:
-            # Some versions give DXFVertex objects
+            # last attempt: method call
             try:
-                pts.append((float(v.dxf.location.x), float(v.dxf.location.y)))
-                continue
+                verts = entity.vertices()
             except Exception:
-                pass
-
-            # Some versions may give tuples/lists
-            try:
-                pts.append((float(v[0]), float(v[1])))
-                continue
-            except Exception:
-                pass
-
-            # Last resort: attributes x,y
-            try:
-                pts.append((float(v.x), float(v.y)))
-                continue
-            except Exception:
-                pass
-
+                verts = []
+        pts = [(float(v.dxf.location.x), float(v.dxf.location.y)) for v in verts]
         return np.array(pts, dtype=float)
+
+    if ezpath is not None:
+        try:
+            p = ezpath.make_path(entity)
+            pts = [(float(v.x), float(v.y)) for v in p.flattening(distance=float(opts.flatten_distance))]
+            return np.array(pts, dtype=float)
+        except Exception:
+            pass
 
     raise ValueError(f"Unsupported entity type '{et}'. Use (LW)POLYLINE in DXF.")
 
@@ -230,10 +299,8 @@ def load_geom_from_dxf(
       geom["R_outer"], geom["Z_outer"], geom["R_inner"], geom["Z_inner"],
       geom["R_plasma"], geom["Z_plasma"], geom["coils"] = {label: (Rc,Zc,dR,dZ)}
     """
-    try:
-        import ezdxf
-    except ImportError as e:
-        raise RuntimeError("Missing dependency: ezdxf. Install: pip install ezdxf") from e
+    if ezdxf is None:
+        raise RuntimeError("Missing dependency: ezdxf. Install: pip install ezdxf")
 
     dxf_path = Path(dxf_path)
     if not dxf_path.exists():
@@ -254,50 +321,67 @@ def load_geom_from_dxf(
 
     def polylines_in_layer(layer_name: str) -> List[np.ndarray]:
         polys: List[np.ndarray] = []
-        for e in msp.query(f'LWPOLYLINE[layer=="{layer_name}"]'):
-            polys.append(_entity_to_xy(e))
-        for e in msp.query(f'POLYLINE[layer=="{layer_name}"]'):
-            polys.append(_entity_to_xy(e))
+        # robust: query all entities on layer and attempt conversion
+        for e in msp.query(f'*[layer=="{layer_name}"]'):
+            try:
+                polys.append(_entity_to_xy(e, opts))
+            except Exception:
+                continue
         return polys
 
     # ---- Walls
     outer_candidates = polylines_in_layer(layers.wall_outer)
     if len(outer_candidates) == 0:
-        raise ValueError(f"No polylines found on layer '{layers.wall_outer}'.")
+        raise ValueError(f"No polyline-like entities found on layer '{layers.wall_outer}'.")
 
     outer_xy = max(outer_candidates, key=lambda xy: abs(_polygon_area(xy)))
-    outer_xy = _ensure_closed(outer_xy * unit_scale)
-    if opts.resample_walls:
-        outer_xy = _resample_closed_curve(outer_xy, opts.n_wall)
+    outer_xy = outer_xy * unit_scale
+    outer_xy = _ensure_closed(_dedupe_sequential(outer_xy))
+
+    # CCW + canonical start + resample policy
+    if opts.enforce_ccw:
+        outer_xy = _enforce_ccw(outer_xy)
+    if opts.canonical_start:
+        outer_xy = _rotate_to_outboard_midplane(outer_xy)
+    outer_xy = _maybe_resample(outer_xy, opts.n_wall, opts.resample_walls, opts.min_wall_pts)
 
     inner_xy = None
     inner_candidates = polylines_in_layer(layers.wall_inner)
     if len(inner_candidates) > 0:
         inner_xy = max(inner_candidates, key=lambda xy: abs(_polygon_area(xy)))
-        inner_xy = _ensure_closed(inner_xy * unit_scale)
-        if opts.resample_walls:
-            inner_xy = _resample_closed_curve(inner_xy, opts.n_inner)
+        inner_xy = inner_xy * unit_scale
+        inner_xy = _ensure_closed(_dedupe_sequential(inner_xy))
+        if opts.enforce_ccw:
+            inner_xy = _enforce_ccw(inner_xy)
+        if opts.canonical_start:
+            inner_xy = _rotate_to_outboard_midplane(inner_xy)
+        inner_xy = _maybe_resample(inner_xy, opts.n_inner, opts.resample_walls, opts.min_wall_pts)
 
     plasma_xy = None
     plasma_candidates = polylines_in_layer(layers.plasma_target)
     if len(plasma_candidates) > 0:
         plasma_xy = max(plasma_candidates, key=lambda xy: abs(_polygon_area(xy)))
-        plasma_xy = _ensure_closed(plasma_xy * unit_scale)
-        if opts.resample_walls:
-            plasma_xy = _resample_closed_curve(plasma_xy, opts.n_plasma)
+        plasma_xy = plasma_xy * unit_scale
+        plasma_xy = _ensure_closed(_dedupe_sequential(plasma_xy))
+        # For plasma target, CCW/canonical is harmless; keep consistent
+        if opts.enforce_ccw:
+            plasma_xy = _enforce_ccw(plasma_xy)
+        if opts.canonical_start:
+            plasma_xy = _rotate_to_outboard_midplane(plasma_xy)
+        plasma_xy = _maybe_resample(plasma_xy, opts.n_plasma, opts.resample_walls, opts.min_wall_pts)
 
     # ---- Coils (preferred): COIL_* layers
     coils: Dict[str, Tuple[float, float, float, float]] = {}
 
     coil_polys: List[Tuple[str, np.ndarray]] = []
     for e in msp.query("LWPOLYLINE"):
-        layer = str(e.dxf.layer)
+        layer = str(getattr(e.dxf, "layer", ""))
         if layer.startswith(layers.coil_layer_prefix):
-            coil_polys.append((layer, _entity_to_xy(e)))
+            coil_polys.append((layer, _entity_to_xy(e, opts)))
     for e in msp.query("POLYLINE"):
-        layer = str(e.dxf.layer)
+        layer = str(getattr(e.dxf, "layer", ""))
         if layer.startswith(layers.coil_layer_prefix):
-            coil_polys.append((layer, _entity_to_xy(e)))
+            coil_polys.append((layer, _entity_to_xy(e, opts)))
 
     if len(coil_polys) > 0:
         for layer, xy in coil_polys:
@@ -376,6 +460,17 @@ def load_geom_from_dxf(
 # Build FreeGSNKE machine
 # -----------------------------
 
+def _build_machine_compat(coils_for_machine, vessel_wall):
+    """
+    Minimal compatibility: prefer Machine(coils, wall=...)
+    fallback to Machine(coils, vessel_wall)
+    """
+    try:
+        return machine.Machine(coils_for_machine, wall=vessel_wall)
+    except TypeError:
+        return machine.Machine(coils_for_machine, vessel_wall)
+
+
 def make_star_machine_from_cad(
     dxf_path: Optional[str] = None,
     layers: CADLayers = CADLayers(),
@@ -435,12 +530,20 @@ def make_star_machine_from_cad(
     for label, (Rc, Zc, dR, dZ) in geom["coils"].items():
         lab = _normalize_label(label)
         c = machine.MultiCoil(float(Rc), float(Zc), float(dR), float(dZ))
-        c.label = lab
+        try:
+            c.label = lab
+        except Exception:
+            pass
         coils_for_machine.append((lab, c))
 
-    tokamak = machine.Machine(coils_for_machine, wall=vessel_wall)
+    tokamak = _build_machine_compat(coils_for_machine, vessel_wall)
+
+    # Keep your original behavior: set limiter as attribute (works with your env)
     if limiter is not None:
-        tokamak.limiter = limiter
+        try:
+            tokamak.limiter = limiter
+        except Exception:
+            pass
 
     # Convenience attributes (to match your existing usage)
     tokamak.active_coils = [label for label, _ in coils_for_machine]
@@ -485,9 +588,23 @@ def plot_cad_geometry(geom: Dict, show: bool = True, ax=None):
 
 
 if __name__ == "__main__":
-    # Smoke test: baseline import
-    tokamak, geom = make_star_machine_from_cad(strict_expected=True)
+    # Smoke test: baseline import (keep plot identical if baseline already dense)
+    opts = CADImportOptions(
+        unit_scale=None,          # infer from INSUNITS
+        resample_walls="auto",    # safe default for CAD-realistic (won't change dense baselines)
+        n_wall=801,
+        n_inner=801,
+        min_wall_pts=200,
+        enforce_ccw=True,
+        canonical_start=True,
+    )
+
+    tokamak, geom = make_star_machine_from_cad(opts=opts, strict_expected=True)
     print("[OK] Loaded CAD machine from:", geom.get("cad_path"))
     print("[INFO] Coils found:", sorted(list(geom["coils"].keys())))
+    print("[INFO] outer wall points:", len(geom["R_outer"]), "| inner wall points:", len(geom.get("R_inner", [])))
+    area = _polygon_area(np.column_stack([geom["R_outer"], geom["Z_outer"]]))
+    print(f"[INFO] outer wall area (signed, CCW+): {float(area):.6e}")
+
     plot_cad_geometry(geom, show=True)
 

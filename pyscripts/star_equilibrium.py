@@ -2,7 +2,7 @@
 star_equilibrium.py
 
 Refined STAR-like "bean" equilibrium using the parameters defined in
-config_star_bean.py.
+config_star_bean.py, with CAD/DXF-backed machine geometry (star_machine_cad.py).
 
 This script:
   - prints basic geometric and solver information to stdout
@@ -10,29 +10,34 @@ This script:
       * poloidal flux contours
       * X- and O-points
       * separatrix from the GS solution
-      * target Miller geometry
-      * vessel outline
+      * (optional) target plasma curve (from CAD PLASMA_TARGET if present)
+      * vessel outline (outer wall)
+      * (optional) inner wall / limiter if present
 """
 
+from __future__ import annotations
+
+import os
 import numpy as np
 import matplotlib.pyplot as plt
-import os
 
 from freegsnke import equilibrium_update, GSstaticsolver
 from freegsnke.jtor_update import ConstrainPaxisIp
 
-from star_machine_cad import make_star_machine_from_cad
-# from star_machine import make_star_machine
+from star_machine_cad import make_star_machine_from_cad, CADImportOptions
 from analyze_star_shape import shape_from_separatrix
 import config_star_bean as cfg
 
 
-def set_star_currents(tokamak,
-                      CS=None, PF1=None, PF2=None, PF3=None):
+# -------------------------
+# Currents
+# -------------------------
+
+def set_star_currents(tokamak, CS=None, PF1=None, PF2=None, PF3=None):
     """
     Assign PF/CS currents to the tokamak Machine.
 
-    Any current set to ``None`` is taken from ``config_star_bean``.
+    Any current set to None is taken from config_star_bean.
     """
     if CS is None:
         CS = cfg.CS_current
@@ -44,57 +49,84 @@ def set_star_currents(tokamak,
         PF3 = cfg.PF3_current
 
     for label, coil in tokamak.coils:
-        if label == "CS":
-            coil.current = CS
-        elif label in ("PF1U", "PF1L"):
-            coil.current = PF1
-        elif label in ("PF2U", "PF2L"):
-            coil.current = PF2
-        elif label in ("PF3U", "PF3L"):
-            coil.current = PF3
+        lab = str(label).strip().upper()
+        if lab == "CS":
+            coil.current = float(CS)
+        elif lab in ("PF1U", "PF1L"):
+            coil.current = float(PF1)
+        elif lab in ("PF2U", "PF2L"):
+            coil.current = float(PF2)
+        elif lab in ("PF3U", "PF3L"):
+            coil.current = float(PF3)
         else:
             coil.current = 0.0
 
 
-def build_equilibrium(verbose: bool = True):
-    """
-    Build the refined STAR-like bean equilibrium using only the parameters
-    specified in ``config_star_bean.py``.
+# -------------------------
+# Build equilibrium
+# -------------------------
 
-    Returns
-    -------
-    eq : freegsnke.equilibrium_update.Equilibrium
-        Equilibrium object with the converged GS solution.
-    tokamak : freegs4e.machine.Machine
-        Machine object (geometry + coils).
-    geom : dict
-        Geometry dictionary returned by :func:`make_star_machine`.
-    shape : dict
-        Geometry of the separatrix, as returned by :func:`shape_from_separatrix`.
+def build_equilibrium(
+    verbose: bool = True,
+    *,
+    dxf_path: str | None = None,
+    unit_scale: float | None = None,     # None => infer from INSUNITS
+    resample_walls: str = "auto",        # "auto" | "always" | "never"
+    n_wall: int = 801,
+    n_inner: int = 801,
+    min_wall_pts: int = 200,
+    enforce_ccw: bool = True,
+    canonical_start: bool = True,
+):
+    """
+    Build the refined STAR-like bean equilibrium using only parameters in config_star_bean.py.
+
+    Uses CAD machine geometry from star_machine_cad.py.
     """
 
     # -------------------------
-    # 1) Geometry and Machine
+    # 1) Geometry and Machine (CAD)
     # -------------------------
-    tokamak, geom = make_star_machine_from_cad()
-    # tokamak, geom = make_star_machine(
-    #     R0=cfg.R0_geom,
-    #     A=cfg.A_geom,
-    #     kappa=cfg.kappa_geom,
-    #     delta=cfg.delta_geom,
-    # )
-    #
-    # Refined coil currents
+    opts = CADImportOptions(
+        unit_scale=unit_scale,
+        resample_walls=str(resample_walls),
+        n_wall=int(n_wall),
+        n_inner=int(n_inner),
+        min_wall_pts=int(min_wall_pts),
+        enforce_ccw=bool(enforce_ccw),
+        canonical_start=bool(canonical_start),
+        # keep other defaults (n_plasma, flatten_distance, label_match_factor)
+    )
+
+    tokamak, geom = make_star_machine_from_cad(
+        dxf_path=dxf_path,
+        opts=opts,
+        strict_expected=True,
+    )
+
+    # Set currents from cfg (stable behavior)
     set_star_currents(tokamak)
 
     if verbose:
-        print("\n--- Target STAR-like geometry (Miller) ---")
+        print("\n--- CAD machine loaded ---")
+        print(f"CAD path      = {geom.get('cad_path', '(unknown)')}")
+        print(f"unit_scale    = {geom.get('unit_scale', unit_scale)}")
+        print(f"resample_walls= {resample_walls} | n_wall={n_wall} n_inner={n_inner} min_wall_pts={min_wall_pts}")
+        print(f"enforce_ccw   = {enforce_ccw} | canonical_start={canonical_start}")
+        print(f"Coils found   = {sorted(list(geom.get('coils', {}).keys()))}")
+        print(f"Outer pts     = {len(geom['R_outer'])}")
+        if "R_inner" in geom:
+            print(f"Inner pts     = {len(geom['R_inner'])}")
+        if "R_plasma" in geom:
+            print(f"Plasma target pts = {len(geom['R_plasma'])}")
+
+        print("\n--- Target STAR-like settings (cfg) ---")
         print(f"R0_geom    = {cfg.R0_geom:.3f} m")
         print(f"A_geom     = {cfg.A_geom:.3f}")
         print(f"kappa_geom = {cfg.kappa_geom:.3f}")
         print(f"delta_geom = {cfg.delta_geom:.3f}")
 
-        print("\n--- PF/CS currents (refined STAR-like bean) ---")
+        print("\n--- PF/CS currents (cfg) ---")
         print(f"CS  = {cfg.CS_current/1e6:.3f} MA")
         print(f"PF1 = {cfg.PF1_current/1e6:.3f} MA")
         print(f"PF2 = {cfg.PF2_current/1e6:.3f} MA")
@@ -103,8 +135,8 @@ def build_equilibrium(verbose: bool = True):
     # -------------------------
     # 2) Numerical domain (R, Z)
     # -------------------------
-    R_outer = geom["R_outer"]
-    Z_outer = geom["Z_outer"]
+    R_outer = np.asarray(geom["R_outer"], dtype=float)
+    Z_outer = np.asarray(geom["Z_outer"], dtype=float)
 
     Rmin = float(R_outer.min() - cfg.margin_RZ)
     Rmax = float(R_outer.max() + cfg.margin_RZ)
@@ -129,7 +161,7 @@ def build_equilibrium(verbose: bool = True):
     )
 
     # -------------------------
-    # 4) Profiles jtor / pressure
+    # 4) Profiles
     # -------------------------
     profiles = ConstrainPaxisIp(
         eq=eq,
@@ -139,11 +171,10 @@ def build_equilibrium(verbose: bool = True):
         alpha_m=cfg.alpha_m,
         alpha_n=cfg.alpha_n,
     )
-    # For this bean scenario we treat the whole core as diverted
     profiles.diverted_core_mask = np.ones_like(eq.psi(), dtype=bool)
 
     # -------------------------
-    # 5) Newton–Krylov solver
+    # 5) Solve
     # -------------------------
     solver = GSstaticsolver.NKGSsolver(eq)
 
@@ -164,7 +195,7 @@ def build_equilibrium(verbose: bool = True):
     shape = shape_from_separatrix(eq, geom)
 
     if verbose:
-        print("\n=== Plasma geometry (refined STAR-like bean) ===")
+        print("\n=== Plasma geometry (from separatrix) ===")
         print(f"  R0_plasma    = {shape['R0_plasma']:.3f} m")
         print(f"  a_plasma     = {shape['a_plasma']:.3f} m")
         print(f"  A_plasma     = {shape['A_plasma']:.3f}")
@@ -177,17 +208,20 @@ def build_equilibrium(verbose: bool = True):
     return eq, tokamak, geom, shape
 
 
+# -------------------------
+# Plot
+# -------------------------
+
 def plot_equilibrium(eq, tokamak, geom, shape, filename: str | None = None):
     """
-    Produce a publication-style equilibrium figure:
-
-      - poloidal flux contours (including X- and O-points via eq.plot)
-      - vessel
-      - target plasma boundary (Miller geometry)
-      - separatrix from the GS equilibrium
+    Publication-style equilibrium figure:
+      - poloidal flux contours (+ X/O points via eq.plot)
+      - vessel outer wall
+      - optional inner wall (limiter)
+      - optional plasma target curve (from CAD PLASMA_TARGET)
+      - separatrix from equilibrium
     """
 
-    # Slightly cleaner style
     plt.rcParams.update({
         "figure.figsize": (6, 10),
         "axes.grid": True,
@@ -204,18 +238,19 @@ def plot_equilibrium(eq, tokamak, geom, shape, filename: str | None = None):
     # Poloidal flux contours and X/O points
     eq.plot(axis=ax, show=False)
 
-    # Vessel and target geometry
-    ax.plot(geom["R_outer"], geom["Z_outer"], "k", lw=2, label="Vessel")
-    ax.plot(
-        geom["R_plasma"], geom["Z_plasma"],
-        "k--", lw=1.5, label="Plasma target (geom)",
-    )
+    # Vessel outer wall
+    ax.plot(geom["R_outer"], geom["Z_outer"], "k", lw=2, label="Vessel (outer wall)")
+
+    # Optional inner wall / limiter if present
+    if "R_inner" in geom and "Z_inner" in geom:
+        ax.plot(geom["R_inner"], geom["Z_inner"], "k--", lw=1.5, label="Inner wall / limiter")
+
+    # Optional plasma target curve if present in CAD
+    if "R_plasma" in geom and "Z_plasma" in geom:
+        ax.plot(geom["R_plasma"], geom["Z_plasma"], "k--", lw=1.5, label="Plasma target (CAD)")
 
     # Separatrix from the GS solution
-    ax.plot(
-        shape["R_sep"], shape["Z_sep"],
-        color="tab:red", lw=2.2, label="Separatrix (eq)",
-    )
+    ax.plot(shape["R_sep"], shape["Z_sep"], color="tab:red", lw=2.2, label="Separatrix (eq)")
 
     ax.set_aspect("equal")
     ax.set_xlim(Rmin, Rmax)
@@ -224,7 +259,6 @@ def plot_equilibrium(eq, tokamak, geom, shape, filename: str | None = None):
     ax.set_ylabel("Z [m]")
     ax.set_title("STAR-like bean equilibrium – equilibrium map")
 
-    # Small box with key plasma parameters
     txt = (
         rf"$R_0^{{\rm pl}} = {shape['R0_plasma']:.2f}\,\mathrm{{m}}$" "\n"
         rf"$a = {shape['a_plasma']:.2f}\,\mathrm{{m}},\ "
@@ -244,20 +278,13 @@ def plot_equilibrium(eq, tokamak, geom, shape, filename: str | None = None):
 
     if filename is None:
         filename = cfg.fig_equilibrium
-    
 
-    # Definir carpeta de resultados
     results_dir = "../results"
-
-    # Crear la carpeta si no existe
     os.makedirs(results_dir, exist_ok=True)
-    
-    filename = os.path.join(results_dir, filename)
-    fig.savefig(filename, dpi=200, bbox_inches="tight")
-    print(f"Equilibrium figure saved to: {filename}")
 
-    # For interactive inspection, uncomment:
-    # plt.show()
+    out_path = os.path.join(results_dir, filename)
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    print(f"Equilibrium figure saved to: {out_path}")
 
 
 def main():
