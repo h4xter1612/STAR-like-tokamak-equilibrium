@@ -139,15 +139,58 @@ def _infer_unit_scale_from_insunits(insunits_code: int) -> float:
 def _entity_to_xy(entity) -> np.ndarray:
     """
     Extract XY vertices from LWPOLYLINE / POLYLINE.
-    Note: if you use SPLINE/arcs, convert them to polylines in CAD before export.
+    Compatible across ezdxf versions where POLYLINE.vertices may be a method or a list.
     """
     et = entity.dxftype()
+
     if et == "LWPOLYLINE":
         pts = [(p[0], p[1]) for p in entity.get_points("xy")]
         return np.array(pts, dtype=float)
+
     if et == "POLYLINE":
-        pts = [(v.dxf.location.x, v.dxf.location.y) for v in entity.vertices()]
+        verts = None
+
+        # ezdxf variant A: entity.vertices is a list-like attribute
+        if hasattr(entity, "vertices") and not callable(getattr(entity, "vertices")):
+            verts = getattr(entity, "vertices")
+
+        # ezdxf variant B: entity.vertices() is a generator method
+        if verts is None and hasattr(entity, "vertices") and callable(getattr(entity, "vertices")):
+            verts = entity.vertices()
+
+        # ezdxf variant C: entity.points() exists
+        if verts is None and hasattr(entity, "points") and callable(getattr(entity, "points")):
+            pts = [(p[0], p[1]) for p in entity.points()]
+            return np.array(pts, dtype=float)
+
+        if verts is None:
+            raise ValueError("Unsupported POLYLINE vertex access pattern for your ezdxf version.")
+
+        pts = []
+        for v in verts:
+            # Some versions give DXFVertex objects
+            try:
+                pts.append((float(v.dxf.location.x), float(v.dxf.location.y)))
+                continue
+            except Exception:
+                pass
+
+            # Some versions may give tuples/lists
+            try:
+                pts.append((float(v[0]), float(v[1])))
+                continue
+            except Exception:
+                pass
+
+            # Last resort: attributes x,y
+            try:
+                pts.append((float(v.x), float(v.y)))
+                continue
+            except Exception:
+                pass
+
         return np.array(pts, dtype=float)
+
     raise ValueError(f"Unsupported entity type '{et}'. Use (LW)POLYLINE in DXF.")
 
 
