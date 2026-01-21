@@ -3,21 +3,12 @@ star_equilibrium.py
 
 Refined STAR-like "bean" equilibrium using the parameters defined in
 config_star_bean.py, with CAD/DXF-backed machine geometry (star_machine_cad.py).
-
-This script:
-  - prints basic geometric and solver information to stdout
-  - produces a publication-style figure with:
-      * poloidal flux contours
-      * X- and O-points
-      * separatrix from the GS solution
-      * (optional) target plasma curve (from CAD PLASMA_TARGET if present)
-      * vessel outline (outer wall)
-      * (optional) inner wall / limiter if present
 """
 
 from __future__ import annotations
 
 import os
+import types
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -62,6 +53,66 @@ def set_star_currents(tokamak, CS=None, PF1=None, PF2=None, PF3=None):
             coil.current = 0.0
 
 
+def _full_core_mask(eq) -> np.ndarray:
+    """
+    Robust core mask for the current grid.
+    Do NOT rely on eq.psi() (can be transient/uninitialized in some paths).
+    """
+    return np.ones(eq.R.shape, dtype=bool)
+
+
+def _ensure_masks(profiles, eq):
+    """
+    FreeGSNKE sometimes tries to copy masks that can be None (esp. limiter_core_mask
+    when an inner wall/limiter exists from CAD). Ensure they exist and match grid.
+    """
+    base = _full_core_mask(eq)
+
+    # Common masks seen in copy() code paths
+    for name in ("diverted_core_mask", "limiter_core_mask"):
+        val = getattr(profiles, name, None)
+        if val is None:
+            setattr(profiles, name, base.copy())
+        else:
+            arr = np.asarray(val)
+            if arr.shape != base.shape:
+                setattr(profiles, name, base.copy())
+
+    # Extra safety: if future versions add more "*_core_mask" fields,
+    # populate any that are present and currently None.
+    for attr in dir(profiles):
+        if attr.endswith("_core_mask"):
+            try:
+                v = getattr(profiles, attr)
+            except Exception:
+                continue
+            if v is None:
+                setattr(profiles, attr, base.copy())
+
+
+def _make_profiles(eq, *, paxis, Ip, fvac, alpha_m, alpha_n):
+    profiles = ConstrainPaxisIp(
+        eq=eq,
+        paxis=float(paxis),
+        Ip=float(Ip),
+        fvac=float(fvac),
+        alpha_m=float(alpha_m),
+        alpha_n=float(alpha_n),
+    )
+
+    _ensure_masks(profiles, eq)
+
+    # Patch copy so it never fails due to None masks.
+    _orig_copy = profiles.copy
+
+    def _safe_copy(self):
+        _ensure_masks(self, eq)
+        return _orig_copy()
+
+    profiles.copy = types.MethodType(_safe_copy, profiles)
+    return profiles
+
+
 # -------------------------
 # Build equilibrium
 # -------------------------
@@ -80,7 +131,6 @@ def build_equilibrium(
 ):
     """
     Build the refined STAR-like bean equilibrium using only parameters in config_star_bean.py.
-
     Uses CAD machine geometry from star_machine_cad.py.
     """
 
@@ -95,7 +145,6 @@ def build_equilibrium(
         min_wall_pts=int(min_wall_pts),
         enforce_ccw=bool(enforce_ccw),
         canonical_start=bool(canonical_start),
-        # keep other defaults (n_plasma, flatten_distance, label_match_factor)
     )
 
     tokamak, geom = make_star_machine_from_cad(
@@ -104,7 +153,7 @@ def build_equilibrium(
         strict_expected=True,
     )
 
-    # Set currents from cfg (stable behavior)
+    # Set currents from cfg
     set_star_currents(tokamak)
 
     if verbose:
@@ -156,41 +205,55 @@ def build_equilibrium(
         tokamak=tokamak,
         Rmin=Rmin, Rmax=Rmax,
         Zmin=Zmin, Zmax=Zmax,
-        nx=cfg.nx_eq,
-        ny=cfg.ny_eq,
+        nx=int(cfg.nx_eq),
+        ny=int(cfg.ny_eq),
     )
 
     # -------------------------
-    # 4) Profiles
-    # -------------------------
-    profiles = ConstrainPaxisIp(
-        eq=eq,
-        paxis=cfg.paxis,
-        Ip=cfg.Ip,
-        fvac=cfg.fvac,
-        alpha_m=cfg.alpha_m,
-        alpha_n=cfg.alpha_n,
-    )
-    profiles.diverted_core_mask = np.ones_like(eq.psi(), dtype=bool)
-
-    # -------------------------
-    # 5) Solve
+    # 4) Solve with continuation (robust)
     # -------------------------
     solver = GSstaticsolver.NKGSsolver(eq)
 
     if verbose:
         print("\n--- Solving equilibrium (Newton–Krylov) ---")
 
-    solver.solve(
-        eq=eq,
-        profiles=profiles,
-        constrain=None,
-        target_relative_tolerance=cfg.target_rel_tol,
-        verbose=verbose,
-    )
+    f_list = getattr(cfg, "f_list_equilibrium", (0.10, 0.20, 0.35, 0.50, 0.70, 0.85, 1.00))
+    tol_ramp  = float(getattr(cfg, "target_rel_tol_ramp", 1e-5))
+    tol_final = float(getattr(cfg, "target_rel_tol", 1e-8))
+
+    for j, f in enumerate(f_list):
+        set_star_currents(
+            tokamak,
+            CS=f * cfg.CS_current,
+            PF1=f * cfg.PF1_current,
+            PF2=f * cfg.PF2_current,
+            PF3=f * cfg.PF3_current,
+        )
+
+        profiles = _make_profiles(
+            eq,
+            paxis=f * cfg.paxis,
+            Ip=f * cfg.Ip,
+            fvac=cfg.fvac,
+            alpha_m=cfg.alpha_m,
+            alpha_n=cfg.alpha_n,
+        )
+
+        this_tol = tol_final if (j == len(f_list) - 1) else tol_ramp
+
+        if verbose:
+            print(f"\n  [continuation] f={f:.2f} | tol={this_tol:.1e}")
+
+        solver.solve(
+            eq=eq,
+            profiles=profiles,
+            constrain=None,
+            target_relative_tolerance=this_tol,
+            verbose=verbose,
+        )
 
     # -------------------------
-    # 6) Separatrix geometry
+    # 5) Separatrix geometry
     # -------------------------
     shape = shape_from_separatrix(eq, geom)
 
@@ -213,15 +276,6 @@ def build_equilibrium(
 # -------------------------
 
 def plot_equilibrium(eq, tokamak, geom, shape, filename: str | None = None):
-    """
-    Publication-style equilibrium figure:
-      - poloidal flux contours (+ X/O points via eq.plot)
-      - vessel outer wall
-      - optional inner wall (limiter)
-      - optional plasma target curve (from CAD PLASMA_TARGET)
-      - separatrix from equilibrium
-    """
-
     plt.rcParams.update({
         "figure.figsize": (6, 10),
         "axes.grid": True,
@@ -235,21 +289,16 @@ def plot_equilibrium(eq, tokamak, geom, shape, filename: str | None = None):
 
     fig, ax = plt.subplots()
 
-    # Poloidal flux contours and X/O points
     eq.plot(axis=ax, show=False)
 
-    # Vessel outer wall
     ax.plot(geom["R_outer"], geom["Z_outer"], "k", lw=2, label="Vessel (outer wall)")
 
-    # Optional inner wall / limiter if present
     if "R_inner" in geom and "Z_inner" in geom:
         ax.plot(geom["R_inner"], geom["Z_inner"], "k--", lw=1.5, label="Inner wall / limiter")
 
-    # Optional plasma target curve if present in CAD
     if "R_plasma" in geom and "Z_plasma" in geom:
         ax.plot(geom["R_plasma"], geom["Z_plasma"], "k--", lw=1.5, label="Plasma target (CAD)")
 
-    # Separatrix from the GS solution
     ax.plot(shape["R_sep"], shape["Z_sep"], color="tab:red", lw=2.2, label="Separatrix (eq)")
 
     ax.set_aspect("equal")

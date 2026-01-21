@@ -19,10 +19,10 @@ delta_geom = 0.30     # target triangularity
 # PF / CS currents
 # (refined STAR-like bean equilibrium)
 # ----------------------------
-CS_current  = 0.8e6    # [A]  0.800 MA
-PF1_current = -0.23e6  # [A] -0.230 MA (PF1U/L)
-PF2_current = 0.0      # [A]  0.000 MA (PF2U/L off)
-PF3_current = 1.10e6   # [A]  1.100 MA (PF3U/L)
+CS_current  = 1.366415e6   # [A]  0.800 MA
+PF1_current = -6.792904e5 # [A] -0.230 MA (PF1U/L)
+PF2_current = -2.258759e5      # [A]  0.000 MA (PF2U/L off)
+PF3_current = 7.360064e5   # [A]  1.100 MA (PF3U/L)
 
 # ----------------------------
 # Plasma and profile parameters
@@ -36,14 +36,14 @@ alpha_n = 1.2     # f(psi) profile exponent
 # ----------------------------
 # Numerical grid and domain
 # ----------------------------
-nx_eq     = 129   # number of points in R
-ny_eq     = 257   # number of points in Z
+nx_eq     = 65   # number of points in R
+ny_eq     = 129   # number of points in Z
 margin_RZ = 0.5   # [m] extra margin around the outer wall
 
 # ----------------------------
 # Newton–Krylov solver
 # ----------------------------
-target_rel_tol = 1e-8  # target relative tolerance for the GS solve
+target_rel_tol = 1e-5  # target relative tolerance for the GS solve
 
 # ----------------------------
 # Output figure / file names
@@ -55,4 +55,3 @@ fig_pressure    = "STAR_bean_pressure.png"
 fig_jtor        = "STAR_bean_jtor_map.png"
 fig_shear       = "STAR_bean_shear_profile.png"
 txt_global      = "STAR_bean_global_numbers.txt"
-
