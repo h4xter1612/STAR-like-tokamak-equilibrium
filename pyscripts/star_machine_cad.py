@@ -1,7 +1,7 @@
 """
 star_machine_cad.py
 
-Build a FreeGSNKE machine from a CAD DXF (2D poloidal cross-section).
+Build a FreeGSNKE/freegs4e machine from a CAD DXF (2D poloidal cross-section).
 
 Conventions:
 - DXF X axis = R [m]
@@ -12,17 +12,25 @@ Conventions:
     WALL_INNER   : closed polyline for limiter/inner wall
     PLASMA_TARGET: closed polyline reference
 - Coils (recommended, deterministic):
-    One rectangle polyline per coil on layers: COIL_CS, COIL_PF1U, COIL_PF1L, ...
+    One rectangle polyline per coil on layers:
+        COIL_CS, COIL_PF1U, COIL_PF1L, ...
+    You may also use multiple CS segments as distinct layers:
+        COIL_CS1M, COIL_CS2U, COIL_CS2L, COIL_CS3U, ...
+    These will be treated as separate coils but grouped under family "CS".
   Fallback (legacy, less robust):
     Rectangles on COILS + labels on COIL_LABELS
 
-Stability improvements (CAD-realistic ready):
+Stability improvements:
   - Sequential duplicate removal / closure enforcement
-  - CCW enforcement for walls (area > 0); if area < 0 reverse
+  - CCW enforcement for walls
   - Optional resampling policy: "auto" | "always" | "never"
   - Canonical start point: outboard midplane (max R, then min |Z|)
   - POLYLINE vertex API compatibility (list vs callable)
   - Optional entity flattening via ezdxf.path (if available)
+
+New in this version:
+  - Coil family grouping: CS*, PF1*, PF2*, PF3* -> families "CS","PF1","PF2","PF3"
+  - Area weights per family for distributing a single circuit current across segments
 """
 
 from __future__ import annotations
@@ -30,6 +38,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set
+import re
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -57,7 +66,7 @@ class CADLayers:
     wall_inner: str = "WALL_INNER"
     plasma_target: str = "PLASMA_TARGET"
 
-    coil_layer_prefix: str = "COIL_"          # Recommended: COIL_CS, COIL_PF1U, ...
+    coil_layer_prefix: str = "COIL_"          # Recommended: COIL_CS, COIL_PF1U, COIL_CS1M, ...
     coils_layer: str = "COILS"                # Fallback: all rectangles here
     coil_labels_layer: str = "COIL_LABELS"    # Fallback: text labels here
 
@@ -70,7 +79,7 @@ class CADImportOptions:
     # Wall resampling policy: "auto" | "always" | "never"
     # - "auto": resample only if len(points) < min_wall_pts
     # - "always": always resample to n_wall/n_inner/n_plasma
-    # - "never": keep vertices as-is (strict retrocompat mode)
+    # - "never": keep vertices as-is
     resample_walls: str = "auto"
 
     # Target points used if resampling is active
@@ -237,14 +246,10 @@ def _entity_to_xy(entity, opts: CADImportOptions) -> np.ndarray:
         return np.array(pts, dtype=float)
 
     if et == "POLYLINE":
-        # ezdxf version differences:
-        #   - entity.vertices() (callable)
-        #   - entity.vertices (list)
         verts = getattr(entity, "vertices", None)
         if callable(verts):
             verts = verts()
         if verts is None:
-            # last attempt: method call
             try:
                 verts = entity.vertices()
             except Exception:
@@ -285,6 +290,43 @@ def _text_entities_from_layer(msp, layer: str) -> List[Tuple[str, float, float]]
     return out
 
 
+def _strip_auto_suffix(label: str) -> str:
+    # if we create CS1M_2, CS1M_3... treat family based on CS1M
+    return re.sub(r"_[0-9]+$", "", str(label).strip().upper())
+
+
+def _coil_family(label: str) -> str:
+    """
+    Map detailed coil labels to a "family" key.
+
+    Examples:
+      CS, CS1M, CS2U, CS3L -> "CS"
+      PF1U, PF1L, PF1A     -> "PF1"
+      PF2U, PF2L           -> "PF2"
+      PF3U, PF3L           -> "PF3"
+
+    If no match, returns the normalized label itself.
+    """
+    lab = _strip_auto_suffix(_normalize_label(label))
+
+    if lab.startswith("CS"):
+        return "CS"
+
+    m = re.match(r"^(PF[0-9]+)", lab)
+    if m:
+        return m.group(1)
+
+    return lab
+
+
+def _area_from_dR_dZ(dR: float, dZ: float) -> float:
+    # rectangle area using half extents
+    a = 4.0 * float(dR) * float(dZ)
+    if not np.isfinite(a) or a <= 0:
+        return 1.0
+    return a
+
+
 # -----------------------------
 # DXF -> geom
 # -----------------------------
@@ -295,9 +337,12 @@ def load_geom_from_dxf(
     opts: CADImportOptions = CADImportOptions(),
 ) -> Dict:
     """
-    Read DXF and return a geom dict compatible with your pipeline:
+    Read DXF and return a geom dict:
       geom["R_outer"], geom["Z_outer"], geom["R_inner"], geom["Z_inner"],
-      geom["R_plasma"], geom["Z_plasma"], geom["coils"] = {label: (Rc,Zc,dR,dZ)}
+      geom["R_plasma"], geom["Z_plasma"],
+      geom["coils"] = {label: (Rc,Zc,dR,dZ)}
+      geom["coil_groups"] = {family: [labels...]}
+      geom["coil_group_weights"] = {family: {label: weight}}
     """
     if ezdxf is None:
         raise RuntimeError("Missing dependency: ezdxf. Install: pip install ezdxf")
@@ -321,7 +366,6 @@ def load_geom_from_dxf(
 
     def polylines_in_layer(layer_name: str) -> List[np.ndarray]:
         polys: List[np.ndarray] = []
-        # robust: query all entities on layer and attempt conversion
         for e in msp.query(f'*[layer=="{layer_name}"]'):
             try:
                 polys.append(_entity_to_xy(e, opts))
@@ -338,7 +382,6 @@ def load_geom_from_dxf(
     outer_xy = outer_xy * unit_scale
     outer_xy = _ensure_closed(_dedupe_sequential(outer_xy))
 
-    # CCW + canonical start + resample policy
     if opts.enforce_ccw:
         outer_xy = _enforce_ccw(outer_xy)
     if opts.canonical_start:
@@ -363,7 +406,6 @@ def load_geom_from_dxf(
         plasma_xy = max(plasma_candidates, key=lambda xy: abs(_polygon_area(xy)))
         plasma_xy = plasma_xy * unit_scale
         plasma_xy = _ensure_closed(_dedupe_sequential(plasma_xy))
-        # For plasma target, CCW/canonical is harmless; keep consistent
         if opts.enforce_ccw:
             plasma_xy = _enforce_ccw(plasma_xy)
         if opts.canonical_start:
@@ -377,22 +419,32 @@ def load_geom_from_dxf(
     for e in msp.query("LWPOLYLINE"):
         layer = str(getattr(e.dxf, "layer", ""))
         if layer.startswith(layers.coil_layer_prefix):
-            coil_polys.append((layer, _entity_to_xy(e, opts)))
+            try:
+                coil_polys.append((layer, _entity_to_xy(e, opts)))
+            except Exception:
+                continue
+
     for e in msp.query("POLYLINE"):
         layer = str(getattr(e.dxf, "layer", ""))
         if layer.startswith(layers.coil_layer_prefix):
-            coil_polys.append((layer, _entity_to_xy(e, opts)))
+            try:
+                coil_polys.append((layer, _entity_to_xy(e, opts)))
+            except Exception:
+                continue
 
     if len(coil_polys) > 0:
         for layer, xy in coil_polys:
-            label = _normalize_label(layer[len(layers.coil_layer_prefix):])
+            # label from layer name after COIL_
+            base_label = _normalize_label(layer[len(layers.coil_layer_prefix):])
             Rc, Zc, dR, dZ = _coil_from_rect_poly(xy * unit_scale)
 
-            if label in coils:
-                raise ValueError(
-                    f"Duplicate coil label '{label}' found in DXF (layers). "
-                    "Ensure each coil is on its own unique COIL_<NAME> layer."
-                )
+            # Ensure uniqueness if multiple entities end up with same label
+            label = base_label
+            k = 1
+            while label in coils:
+                k += 1
+                label = f"{base_label}_{k}"
+
             coils[label] = (float(Rc), float(Zc), float(dR), float(dZ))
 
     else:
@@ -423,11 +475,32 @@ def load_geom_from_dxf(
                 )
             coils[label] = (float(Rc), float(Zc), float(dR), float(dZ))
 
+    # ---- Coil grouping (families + area weights)
+    coil_groups: Dict[str, List[str]] = {}
+    coil_group_weights: Dict[str, Dict[str, float]] = {}
+
+    # Build family -> labels
+    for lab, (_Rc, _Zc, dR, dZ) in coils.items():
+        fam = _coil_family(lab)
+        coil_groups.setdefault(fam, []).append(lab)
+
+    # Compute area weights per family
+    for fam, labs in coil_groups.items():
+        areas = []
+        for lab in labs:
+            _Rc, _Zc, dR, dZ = coils[lab]
+            areas.append(_area_from_dR_dZ(dR, dZ))
+        areas = np.array(areas, dtype=float)
+        w = areas / float(np.sum(areas)) if float(np.sum(areas)) > 0 else np.ones_like(areas) / len(areas)
+        coil_group_weights[fam] = {lab: float(wi) for lab, wi in zip(labs, w)}
+
     # Assemble geom dict
     geom: Dict = {
         "R_outer": outer_xy[:, 0],
         "Z_outer": outer_xy[:, 1],
         "coils": coils,
+        "coil_groups": coil_groups,
+        "coil_group_weights": coil_group_weights,
         "cad_path": str(dxf_path),
         "unit_scale": float(unit_scale),
     }
@@ -438,7 +511,7 @@ def load_geom_from_dxf(
         geom["R_plasma"] = plasma_xy[:, 0]
         geom["Z_plasma"] = plasma_xy[:, 1]
 
-    # Basic derived numbers (nice-to-have)
+    # Basic derived numbers
     if "R_plasma" in geom:
         Rmin, Rmax = float(np.min(geom["R_plasma"])), float(np.max(geom["R_plasma"]))
         Zmin, Zmax = float(np.min(geom["Z_plasma"])), float(np.max(geom["Z_plasma"]))
@@ -457,7 +530,7 @@ def load_geom_from_dxf(
 
 
 # -----------------------------
-# Build FreeGSNKE machine
+# Build FreeGSNKE/freegs4e machine
 # -----------------------------
 
 def _build_machine_compat(coils_for_machine, vessel_wall):
@@ -481,17 +554,6 @@ def make_star_machine_from_cad(
     """
     Build a FreeGSNKE machine from CAD DXF.
 
-    Parameters
-    ----------
-    dxf_path:
-        If None, defaults to pyscripts/cad/star_baseline.dxf
-        If relative, resolved relative to pyscripts/cad/
-    strict_expected:
-        If True, raise if expected coils are missing.
-    expected_coils:
-        Set of expected coil labels (already normalized, e.g., {"CS","PF1U",...}).
-        If None and strict_expected=True, uses the standard STAR baseline set.
-
     Returns
     -------
     tokamak : machine.Machine
@@ -510,14 +572,25 @@ def make_star_machine_from_cad(
 
     geom = load_geom_from_dxf(dxf, layers=layers, opts=opts)
 
-    # Optional strict coil check (useful for retrocompatibility debugging)
+    # Optional strict coil check
     if strict_expected:
         if expected_coils is None:
             expected_coils = {"CS", "PF1U", "PF1L", "PF2U", "PF2L", "PF3U", "PF3L"}
+
         have = set(_normalize_label(k) for k in geom["coils"].keys())
-        missing = sorted(list(set(expected_coils) - have))
+        have_fams = set(_coil_family(k) for k in have)
+
+        missing = []
+        for exp in expected_coils:
+            expn = _normalize_label(exp)
+            if expn in have:
+                continue
+            if expn in have_fams:
+                continue
+            missing.append(expn)
+
         if missing:
-            raise ValueError(f"Missing expected coils in CAD import: {missing}")
+            raise ValueError(f"Missing expected coils in CAD import: {sorted(missing)}")
 
     # Walls
     vessel_wall = machine.Wall(geom["R_outer"], geom["Z_outer"])
@@ -538,21 +611,69 @@ def make_star_machine_from_cad(
 
     tokamak = _build_machine_compat(coils_for_machine, vessel_wall)
 
-    # Keep your original behavior: set limiter as attribute (works with your env)
+    # limiter attribute (best-effort)
     if limiter is not None:
         try:
             tokamak.limiter = limiter
         except Exception:
             pass
 
-    # Convenience attributes (to match your existing usage)
+    # Convenience attributes
     tokamak.active_coils = [label for label, _ in coils_for_machine]
     tokamak.passive_coils = []
     tokamak.R0 = float(geom.get("R0", np.nan))
     tokamak.geom = geom
     tokamak.coils_dict = {label: coil for label, coil in coils_for_machine}
 
+    # NEW: family grouping and weights
+    tokamak.coil_groups = dict(geom.get("coil_groups", {}))
+    tokamak.coil_group_weights = dict(geom.get("coil_group_weights", {}))
+
     return tokamak, geom
+
+
+# -----------------------------
+# Optional: apply grouped currents
+# -----------------------------
+
+def apply_group_currents(tokamak, group_currents: Dict[str, float], *, mode: str = "area"):
+    """
+    Apply currents by coil family.
+
+    Example:
+      apply_group_currents(tokamak, {"CS": 1.2e6, "PF1": -0.3e6, "PF2": 0.0, "PF3": 1.0e6})
+
+    mode:
+      - "same": every segment in the family gets the full family current
+      - "equal": family current is split equally across segments
+      - "area": family current is split by area weights (recommended for CS segmentation)
+    """
+    mode = str(mode).lower().strip()
+    groups = getattr(tokamak, "coil_groups", {}) or {}
+    weights = getattr(tokamak, "coil_group_weights", {}) or {}
+
+    for fam, Itot in group_currents.items():
+        fam = _normalize_label(fam)
+        labs = groups.get(fam, [])
+        if not labs:
+            continue
+
+        if mode == "same":
+            for lab in labs:
+                if lab in tokamak.coils_dict:
+                    tokamak.coils_dict[lab].current = float(Itot)
+            continue
+
+        if mode == "equal":
+            w = {lab: 1.0 / len(labs) for lab in labs}
+        else:  # "area"
+            w = weights.get(fam, None)
+            if not w:
+                w = {lab: 1.0 / len(labs) for lab in labs}
+
+        for lab in labs:
+            if lab in tokamak.coils_dict:
+                tokamak.coils_dict[lab].current = float(Itot) * float(w.get(lab, 0.0))
 
 
 # -----------------------------
@@ -569,6 +690,7 @@ def plot_cad_geometry(geom: Dict, show: bool = True, ax=None):
     if "R_plasma" in geom:
         ax.plot(geom["R_plasma"], geom["Z_plasma"], color="tab:orange", lw=1.5, label="CAD plasma target")
 
+    # coils
     for name, (Rc, Zc, dR, dZ) in geom["coils"].items():
         x0, x1 = Rc - dR, Rc + dR
         y0, y1 = Zc - dZ, Zc + dZ
@@ -588,10 +710,10 @@ def plot_cad_geometry(geom: Dict, show: bool = True, ax=None):
 
 
 if __name__ == "__main__":
-    # Smoke test: baseline import (keep plot identical if baseline already dense)
+    # Smoke test
     opts = CADImportOptions(
-        unit_scale=None,          # infer from INSUNITS
-        resample_walls="auto",    # safe default for CAD-realistic (won't change dense baselines)
+        unit_scale=None,
+        resample_walls="auto",
         n_wall=801,
         n_inner=801,
         min_wall_pts=200,
@@ -602,6 +724,7 @@ if __name__ == "__main__":
     tokamak, geom = make_star_machine_from_cad(opts=opts, strict_expected=True)
     print("[OK] Loaded CAD machine from:", geom.get("cad_path"))
     print("[INFO] Coils found:", sorted(list(geom["coils"].keys())))
+    print("[INFO] Families:", {k: len(v) for k, v in (geom.get("coil_groups", {}) or {}).items()})
     print("[INFO] outer wall points:", len(geom["R_outer"]), "| inner wall points:", len(geom.get("R_inner", [])))
     area = _polygon_area(np.column_stack([geom["R_outer"], geom["Z_outer"]]))
     print(f"[INFO] outer wall area (signed, CCW+): {float(area):.6e}")

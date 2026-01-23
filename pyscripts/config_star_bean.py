@@ -16,13 +16,23 @@ kappa_geom = 1.8      # target elongation
 delta_geom = 0.30     # target triangularity
 
 # ----------------------------
-# PF / CS currents
-# (refined STAR-like bean equilibrium)
+# Coil current grouping / distribution
 # ----------------------------
-CS_current  = 1.366415e6   # [A]  0.800 MA
-PF1_current = -6.792904e5 # [A] -0.230 MA (PF1U/L)
-PF2_current = -2.258759e5      # [A]  0.000 MA (PF2U/L off)
-PF3_current = 7.360064e5   # [A]  1.100 MA (PF3U/L)
+# If your CAD has segmented coils (e.g., CS1M, CS2U, CS2L, ...),
+# you must NOT set each segment to CS_current, or you'd multiply the CS effect.
+# This mode tells the code how to distribute a single family current across segments:
+#   - "same"  : each segment gets the full current (NOT recommended for segmented CS)
+#   - "equal" : split equally among segments (sum of segment currents = family current)
+#   - "area"  : split by segment cross-sectional area (uniform current density proxy)
+coil_group_mode = "area"
+
+# ----------------------------
+# PF / CS currents (total family currents)
+# ----------------------------
+CS_current  = 1.483688e6   # [A]  1.485 MA  (TOTAL CS family current)
+PF1_current = -1.220969e6  # [A] -0.841 MA  (TOTAL PF1 family current)
+PF2_current = -4.403926e5  # [A] -0.219 MA  (TOTAL PF2 family current)
+PF3_current = 1.254130e6   # [A]  0.918 MA  (TOTAL PF3 family current)
 
 # ----------------------------
 # Plasma and profile parameters
@@ -36,14 +46,21 @@ alpha_n = 1.2     # f(psi) profile exponent
 # ----------------------------
 # Numerical grid and domain
 # ----------------------------
-nx_eq     = 65   # number of points in R
-ny_eq     = 129   # number of points in Z
-margin_RZ = 0.5   # [m] extra margin around the outer wall
+nx_eq     = 65     # number of points in R
+ny_eq     = 129    # number of points in Z
+margin_RZ = 0.5    # [m] extra margin around the outer wall
 
 # ----------------------------
 # Newton–Krylov solver
 # ----------------------------
-target_rel_tol = 1e-5  # target relative tolerance for the GS solve
+# Final target tolerance (last continuation step)
+target_rel_tol = 1e-5
+
+# Slightly looser tolerance for intermediate continuation steps (recommended)
+target_rel_tol_ramp = 3e-6
+
+# Continuation schedule for equilibrium solve (robust ramp)
+f_list_equilibrium = (0.08, 0.15, 0.25, 0.40, 0.60, 0.78, 0.90, 1.00)
 
 # ----------------------------
 # Output figure / file names
@@ -55,3 +72,4 @@ fig_pressure    = "STAR_bean_pressure.png"
 fig_jtor        = "STAR_bean_jtor_map.png"
 fig_shear       = "STAR_bean_shear_profile.png"
 txt_global      = "STAR_bean_global_numbers.txt"
+
