@@ -29,10 +29,10 @@ coil_group_mode = "area"
 # ----------------------------
 # PF / CS currents (total family currents)
 # ----------------------------
-CS_current  = 1.483688e6   # [A]  1.485 MA  (TOTAL CS family current)
-PF1_current = -1.220969e6  # [A] -0.841 MA  (TOTAL PF1 family current)
-PF2_current = -4.403926e5  # [A] -0.219 MA  (TOTAL PF2 family current)
-PF3_current = 1.254130e6   # [A]  0.918 MA  (TOTAL PF3 family current)
+CS_current  = 2.000000e5   # [A]  1.485 MA  (TOTAL CS family current)
+PF1_current = -3.337859e5  # [A] -0.841 MA  (TOTAL PF1 family current)
+PF2_current = -4.944562e5  # [A] -0.219 MA  (TOTAL PF2 family current)
+PF3_current = 0.000000e0  # [A]  0.918 MA  (TOTAL PF3 family current)
 
 # ----------------------------
 # Plasma and profile parameters
