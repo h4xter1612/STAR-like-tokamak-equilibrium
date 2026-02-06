@@ -1,0 +1,82 @@
+{
+  "objective": "cad",
+  "null_mode": "lower",
+  "best_currents_MA": {
+    "CS": 3.421172175407065,
+    "PF1": -1.5519747091956937,
+    "PF2": 1.0844960009693208,
+    "PF3": -0.07933410109009831
+  },
+  "best_currents_A": {
+    "CS": 3421172.175407065,
+    "PF1": -1551974.7091956937,
+    "PF2": 1084496.0009693208,
+    "PF3": -79334.10109009831
+  },
+  "best_misfit": 12.54857920959076,
+  "best_result": {
+    "ok": true,
+    "ok_solve": true,
+    "misfit": 12.54857920959076,
+    "currents_A": {
+      "CS": 3421172.175407065,
+      "PF1": -1551974.7091956937,
+      "PF2": 1084496.0009693208,
+      "PF3": -79334.10109009831
+    },
+    "diag": {
+      "ok": true,
+      "R0": 3.2540256190115624,
+      "Z0": 0.00013039781818147134,
+      "a": 2.4934999329335996,
+      "A": 1.3050032911704172,
+      "kappa": 1.9268756860567664,
+      "delta_u": 0.32228077054693965,
+      "delta_l": 0.32228077054693965,
+      "area_m2": 33.82588888595265,
+      "Rmin": 0.7605256860779631,
+      "Rmax": 5.747525551945162,
+      "Zmin": -4.804533996135749,
+      "Zmax": 4.804794791772112,
+      "method": "analyze_star_separatrix",
+      "R_ax": 3.89970955663233,
+      "Z_ax": 0.0
+    },
+    "shape_ok_sep": true,
+    "objective": "cad",
+    "obj": {
+      "mode": "cad",
+      "ok": true,
+      "null_mode": "lower",
+      "scalar_targets": {
+        "R0": 4.0,
+        "A": 2.08228479474368,
+        "kappa": 2.5,
+        "dbar": 0.6442176872376912
+      },
+      "scalar_vals": {
+        "R0": 3.2540256190115624,
+        "A": 1.3050032911704172,
+        "kappa": 1.9268756860567664,
+        "dbar": 0.32228077054693965
+      },
+      "dx_lower_m": 0.5218588573919593,
+      "dx_upper_m": null,
+      "shape_rms_m": 0.5573183254910657,
+      "term_scalar": 26.416937132146245,
+      "term_x": 6.808416675961031,
+      "term_shape": 124.24148637126619,
+      "ok_sep": true,
+      "n_xpoints": 8,
+      "fallback_lcfs": false
+    },
+    "elapsed_s": 75.51564025878906
+  },
+  "final_steps_MA": {
+    "CS": 0.01875,
+    "PF1": 0.01875,
+    "PF2": 0.01875,
+    "PF3": 0.01875
+  },
+  "log_jsonl": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\scan_refine_20260205_232600.jsonl"
+}

@@ -16,10 +16,10 @@ coil_group_mode = "area"
 # ----------------------------
 # PF / CS currents (total family currents)
 # ----------------------------
-CS_current  = 1.996172175407065e6
-PF1_current = -1.5519747091956937e6
-PF2_current = 1.0844960009693208e6
-PF3_current = -0.07933410109009831e6
+CS_current  = 3.42117217541e6 # 0.6
+PF1_current = -1.5519747092e6
+PF2_current = 1.08449600097e6
+PF3_current = -0.0793341010901e6
 
 # ----------------------------
 # Plasma and profile parameters
@@ -46,6 +46,7 @@ margin_RZ = 0.5
 target_rel_tol = 1e-5
 target_rel_tol_ramp = 2e-5
 f_list_equilibrium = (0.15, 0.35, 0.65, 1.0)
+# f_list_equilibrium = (1.0,)
 
 # ----------------------------
 # CAD import

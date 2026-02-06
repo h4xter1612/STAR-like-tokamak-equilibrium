@@ -1,0 +1,53 @@
+{
+  "geom_keys": [
+    "R0",
+    "R_inner",
+    "R_outer",
+    "R_plasma",
+    "Z_inner",
+    "Z_outer",
+    "Z_plasma",
+    "a",
+    "blanket_filaments",
+    "blanket_meta",
+    "cad_path",
+    "coil_group_weights",
+    "coil_groups",
+    "coils",
+    "kappa_geom_est",
+    "plasma_auto_meta",
+    "strike_lines_target",
+    "unit_scale",
+    "xpoints_target"
+  ],
+  "shape_keys": [
+    "A_plasma",
+    "R0_plasma",
+    "R_ax",
+    "R_sep",
+    "Z_ax",
+    "Z_sep",
+    "a_plasma",
+    "delta_l",
+    "delta_u",
+    "fallback_lcfs",
+    "kappa_plasma",
+    "ok_sep",
+    "plasma_diag",
+    "psi_ax",
+    "psi_sep",
+    "reason",
+    "xpoints"
+  ],
+  "has_inner_wall": true,
+  "n_outer": 802,
+  "n_inner": 802,
+  "n_plasma_target": 321,
+  "shape_ok_sep": true,
+  "fallback_lcfs": null,
+  "lcfs_key_found": [
+    "R_sep",
+    "Z_sep",
+    539
+  ]
+}
