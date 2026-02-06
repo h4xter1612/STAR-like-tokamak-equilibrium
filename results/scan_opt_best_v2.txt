@@ -1,0 +1,17 @@
+BEST EQUILIBRIUM FOUND (CAD OPT SCAN)
+DXF: C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts\cad\star_baseline.dxf
+coil_group_mode: area
+misfit: 1.369775e+00
+CS_total:  4.827830e+05 A
+PF1_total: 1.576038e+05 A
+PF2_total: -1.134534e+06 A
+PF3_total: 0.000000e+00 A
+R_ax: 3.898511 m
+Z_ax: -0.014486 m
+shape:
+  R0_plasma: 3.163003724202175
+  A_plasma: 1.2318538810442112
+  kappa_plasma: 1.5773653052468148
+  delta_u: 0.45814095607612065
+  delta_l: 0.45814095607612054
+  a_plasma: 2.567677687162845

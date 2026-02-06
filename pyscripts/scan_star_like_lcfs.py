@@ -1,20 +1,18 @@
 """
-scan_star_like.py
+scan_star_like_lcfs.py
 
 Robust scan for convergent STAR-like equilibria using CAD/DXF geometry.
 Optimizes ONLY coil-family currents (CS_total, PF1_total, PF2_total, PF3_total).
-Coil positions are fixed by DXF.
 
 UPDATED:
-  - Uses LCFS-limiter extraction (analyze_star_lcfs.shape_from_lcfs_limiter)
-  - STAR-like targets by default: R0~4m, A~2, kappa~2.5 (delta soft)
-  - Mixes GLOBAL + LOCAL sampling in stage 1 to avoid "getting stuck"
-  - Optional boundary-to-CAD target misfit if geom provides R_plasma/Z_plasma
-  - Family current application supports segmented coils via apply_group_currents()
+- Uses LCFS limiter-based geometry extraction (analyze_star_lcfs.shape_from_lcfs_limiter)
+  which is appropriate for LIMITED plasmas (no X-point / no separatrix).
+- Rejects bogus LCFS that touches the numerical-domain border (common failure mode).
+- Family currents applied via star_machine_cad.apply_group_currents() for segmented coils.
 
 Outputs:
-  - results/scan_opt_results.jsonl
-  - results/scan_opt_best.txt
+  - results/scan_star_like_results.jsonl
+  - results/scan_star_like_best.txt
 """
 
 from __future__ import annotations
@@ -34,78 +32,12 @@ import numpy as np
 from freegsnke import equilibrium_update, GSstaticsolver
 from freegsnke.jtor_update import ConstrainPaxisIp
 
-# IMPORTANT: use LCFS-limiter extractor
 from analyze_star_lcfs import shape_from_lcfs_limiter
-
-# You can keep your cfg module name; just ensure targets match STAR-like.
-import config_star_bean as cfg
+import config_star_bean as cfg  # puedes renombrar a config_star_like si lo prefieres
 
 
 # -------------------------
-# Penalties / knobs
-# -------------------------
-
-PENALTY_NEG_DELTA = 2.0     # keep delta soft; raise only if you really want apple/bean
-PENALTY_THIN      = 3.0     # small plasma penalty
-PENALTY_AXIS_OUT  = 5.0*3     # axis far from LCFS center penalty
-PENALTY_BAD_LCFS  = 30.0    # if LCFS extraction is weird, penalize heavily
-
-
-# -------------------------
-# Small geometry helpers
-# -------------------------
-
-def _default_dxf() -> str:
-    here = Path(__file__).resolve().parent
-    return str((here / "cad" / "star_baseline.dxf").resolve())
-
-def _results_dir() -> Path:
-    here = Path(__file__).resolve().parent
-    return (here.parent / "results")
-
-def _poly_arclen(R, Z):
-    R = np.asarray(R, float)
-    Z = np.asarray(Z, float)
-    dR = np.diff(R)
-    dZ = np.diff(Z)
-    s = np.r_[0.0, np.cumsum(np.sqrt(dR*dR + dZ*dZ))]
-    return s
-
-def _resample_polyline_by_s(R, Z, n=400, closed=True):
-    R = np.asarray(R, float)
-    Z = np.asarray(Z, float)
-    if closed:
-        if abs(R[0] - R[-1]) + abs(Z[0] - Z[-1]) > 1e-12:
-            R = np.r_[R, R[0]]
-            Z = np.r_[Z, Z[0]]
-    s = _poly_arclen(R, Z)
-    if s[-1] <= 0:
-        return R, Z
-    su = np.linspace(0.0, s[-1], int(n), endpoint=True)
-    Ru = np.interp(su, s, R)
-    Zu = np.interp(su, s, Z)
-    return Ru, Zu
-
-def _rms_boundary_distance(Ra, Za, Rb, Zb, n=400):
-    """
-    Symmetric-ish RMS distance between two closed curves after arclength resampling.
-    This is not a perfect Hausdorff distance, but is robust and cheap.
-    """
-    Ra, Za = _resample_polyline_by_s(Ra, Za, n=n, closed=True)
-    Rb, Zb = _resample_polyline_by_s(Rb, Zb, n=n, closed=True)
-
-    A = np.c_[Ra, Za]
-    B = np.c_[Rb, Zb]
-
-    # nearest neighbor approx (O(N^2) but N=400 OK)
-    dAB = np.min(((A[:, None, :] - B[None, :, :])**2).sum(axis=2), axis=1)
-    dBA = np.min(((B[:, None, :] - A[None, :, :])**2).sum(axis=2), axis=1)
-    rms = np.sqrt(0.5*(np.mean(dAB) + np.mean(dBA)))
-    return float(rms)
-
-
-# -------------------------
-# Masks robustness (FreeGSNKE)
+# Utilities: mask/copy robustness
 # -------------------------
 
 def _full_core_mask(eq) -> np.ndarray:
@@ -121,7 +53,6 @@ def _ensure_profile_masks(profiles, eq, *, force: bool = False):
         "limiter_mask",
         "core_mask",
     )
-
     for name in candidates:
         try:
             v = getattr(profiles, name, None)
@@ -150,7 +81,6 @@ def _patch_profiles_copy_once():
     from freegsnke.jtor_update import ConstrainPaxisIp as _C
     if getattr(_C, "_safe_copy_patched", False):
         return
-
     _orig_copy = _C.copy
 
     def _safe_copy(self, *args, **kwargs):
@@ -158,22 +88,14 @@ def _patch_profiles_copy_once():
         if eq is not None:
             try:
                 mask = np.ones(eq.R.shape, dtype=bool)
-            except Exception:
-                mask = None
-            if mask is not None:
-                for name in ("diverted_core_mask", "limiter_core_mask"):
-                    try:
-                        if getattr(self, name, None) is None:
-                            setattr(self, name, mask)
-                    except Exception:
-                        pass
                 for attr in dir(self):
-                    if attr.endswith("_core_mask"):
+                    if attr.endswith("_core_mask") and getattr(self, attr, None) is None:
                         try:
-                            if getattr(self, attr, None) is None:
-                                setattr(self, attr, mask)
+                            setattr(self, attr, mask)
                         except Exception:
                             pass
+            except Exception:
+                pass
         return _orig_copy(self, *args, **kwargs)
 
     _C.copy = _safe_copy
@@ -182,6 +104,7 @@ def _patch_profiles_copy_once():
 def _patch_copy_into_allow_none_once():
     import freegsnke.copying as _copying
     import freegsnke.jtor_update as _jtor
+
     if getattr(_copying, "_allow_none_patched", False):
         return
 
@@ -212,10 +135,22 @@ def _patch_copy_into_allow_none_once():
 
 
 # -------------------------
-# Family current application (segmented coils)
+# CAD helpers
 # -------------------------
 
+def _default_dxf() -> str:
+    here = Path(__file__).resolve().parent
+    return str((here / "cad" / "star_baseline.dxf").resolve())
+
+def _results_dir() -> Path:
+    here = Path(__file__).resolve().parent
+    return (here.parent / "results")
+
+
 def apply_star_family_currents(tokamak, CS, PF1, PF2, PF3, *, mode: str = "area"):
+    """
+    Apply FAMILY total currents to possibly segmented coils in CAD.
+    """
     try:
         from star_machine_cad import apply_group_currents
     except Exception:
@@ -245,7 +180,7 @@ def apply_star_family_currents(tokamak, CS, PF1, PF2, PF3, *, mode: str = "area"
                     pass
         return
 
-    # Fallback legacy labels
+    # fallback legacy labels
     for label, coil in tokamak.coils:
         lab = str(label).strip().upper()
         if lab == "CS":
@@ -261,88 +196,71 @@ def apply_star_family_currents(tokamak, CS, PF1, PF2, PF3, *, mode: str = "area"
 
 
 # -------------------------
-# Misfit objective (STAR-like)
+# Misfit (STAR-like targets)
 # -------------------------
 
-def compute_misfit(eq, geom, shape, *, stage: str, targets: dict) -> float:
+def compute_misfit(eq, shape, *, stage: str,
+                   R0_target: float, A_target: float, kappa_target: float, delta_target: float) -> float:
     """
-    Lower is better.
-    STAR-like objective: match (R0, A, kappa) strongly; delta is soft.
-    If CAD provides a plasma target curve (R_plasma/Z_plasma), also match boundary.
+    Lower is better. Designed to be robust given experimental/parametric STAR design space.
+    - Coarse: focus on R0/A/kappa; delta only forced to be not-crazy.
+    - Refine: tighten + prefer positive delta.
     """
-
-    # Extract shape
-    R0_pl    = float(shape["R0_plasma"])
-    A_pl     = float(shape["A_plasma"])
-    kappa_pl = float(shape["kappa_plasma"])
-    du       = float(shape["delta_u"])
-    dl       = float(shape["delta_l"])
-    a_pl     = float(shape["a_plasma"])
-    delta_bar = 0.5 * (du + dl)
-
-    R_ax, Z_ax = eq.magneticAxis()[:2]
-    R_ax = float(R_ax)
-
-    # Targets (STAR defaults)
-    R0_t = float(targets["R0"])
-    A_t  = float(targets["A"])
-    k_t  = float(targets["kappa"])
-    d_t  = float(targets["delta"])
-
-    # Stage weights/tolerances
     stage = str(stage).lower().strip()
+
+    R0 = float(shape["R0_plasma"])
+    A  = float(shape["A_plasma"])
+    k  = float(shape["kappa_plasma"])
+    du = float(shape["delta_u"])
+    dl = float(shape["delta_l"])
+    d  = 0.5 * (du + dl)
+    a  = float(shape["a_plasma"])
+    R_ax = float(shape["R_ax"])
+
+    # Stage tolerances
     if stage == "refine":
-        sig_R0, sig_A, sig_k = 0.25, 0.35, 0.40
-        sig_d = 0.30
-        w_delta = 0.35   # still soft even in refine
-        w_bnd   = 1.2
+        sig_R, sig_A, sig_k, sig_d = 0.35, 0.35, 0.45, 0.25
+        w_delta = 1.0
+        delta_min = 0.05
+        w_neg = 8.0
     else:
-        sig_R0, sig_A, sig_k = 0.45, 0.60, 0.70
-        sig_d = 0.45
-        w_delta = 0.10
-        w_bnd   = 0.35
+        sig_R, sig_A, sig_k, sig_d = 0.60, 0.60, 0.80, 0.40
+        w_delta = 0.2
+        delta_min = -0.10
+        w_neg = 3.0
 
-    # Core Miller-like terms
-    term_R0 = ((R0_pl - R0_t) / sig_R0) ** 2
-    term_A  = ((A_pl  - A_t)  / sig_A) ** 2
-    term_k  = ((kappa_pl - k_t) / sig_k) ** 2
-    term_d  = ((delta_bar - d_t) / sig_d) ** 2
+    # Core terms (use axis for major-radius control; LCFS for A,kappa)
+    term_R = ((R_ax - R0_target) / sig_R) ** 2
+    term_A = ((A - A_target) / sig_A) ** 2
+    term_k = ((k - kappa_target) / sig_k) ** 2
+    term_d = ((d - delta_target) / sig_d) ** 2
 
-    mis = float(np.sqrt(term_R0 + term_A + term_k + w_delta * term_d))
+    mis = float(np.sqrt(term_R + term_A + term_k + w_delta * term_d))
 
-    # Penalize nonsense LCFS
-    if not np.isfinite(mis) or (a_pl <= 0.05) or (A_pl > 12.0) or (R0_pl < 0.5):
-        return float(PENALTY_BAD_LCFS + 100.0)
+    # Guard rails (evitan "best" absurdos si algo se fue mal)
+    # STAR: A~2 => a~2 m; aceptamos amplio pero penalizamos extremos
+    if a < 0.6:
+        mis += 8.0 * (0.6 - a)
+    if a > 3.5:
+        mis += 2.0 * (a - 3.5)
 
-    # Avoid too thin plasma
-    a_min = float(getattr(cfg, "a_min_scan", 0.7))
-    if a_pl < a_min:
-        mis += PENALTY_THIN * (a_min - a_pl)
+    # Penaliza delta muy negativo
+    if d < 0.0:
+        mis += w_neg * abs(d)
 
-    # Axis should not be wildly far from the LCFS "center"
-    # (this helps when solver locks into a weird outer region)
-    if abs(R_ax - R0_pl) > max(0.4, 0.8 * a_pl):
-        mis += PENALTY_AXIS_OUT * (abs(R_ax - R0_pl) / max(0.5, a_pl))
+    # Empuja a delta mínimo (suave)
+    if d < delta_min:
+        mis += 2.0 * ((delta_min - d) / 0.10)
 
-    # Soft triangularity positivity (keep it mild; STAR literature doesn't fix a single delta)
-    if delta_bar < 0.0:
-        mis += PENALTY_NEG_DELTA * abs(delta_bar)
-
-    # Optional: match CAD plasma target curve if present
-    if ("R_plasma" in geom) and ("Z_plasma" in geom) and ("R_sep" in shape) and ("Z_sep" in shape):
-        try:
-            rms = _rms_boundary_distance(shape["R_sep"], shape["Z_sep"], geom["R_plasma"], geom["Z_plasma"], n=300)
-            # normalize by meters; ~0.2-0.4 m typical reasonable mismatch scale
-            mis += w_bnd * (rms / 0.30)
-        except Exception:
-            # don't kill; just ignore
-            pass
+    # Penaliza R0 LCFS muy lejos del target (suave)
+    if abs(R0 - R0_target) > 1.5:
+        mis += 2.0 * (abs(R0 - R0_target) - 1.5)
 
     return float(mis)
 
 
 # -------------------------
-# Solve with continuation (returns LCFS-limiter shape)
+# Solve with continuation + LCFS extraction
 # -------------------------
 
 def solve_with_continuation(tokamak, geom, CS, PF1, PF2, PF3, *,
@@ -352,10 +270,13 @@ def solve_with_continuation(tokamak, geom, CS, PF1, PF2, PF3, *,
                             target_rel_tol: float,
                             margin_RZ: float,
                             f_list: tuple[float, ...],
-                            silence_solver: bool,
                             coil_group_mode: str,
-                            prefer_inner: bool,
-                            psi_percentile: float):
+                            prefer_inner_limiter: bool,
+                            silence_solver: bool = True):
+    """
+    Build eq and solve with current/profile ramp in f_list.
+    Returns (eq, shape) on success.
+    """
     R_outer = np.asarray(geom["R_outer"], dtype=float)
     Z_outer = np.asarray(geom["Z_outer"], dtype=float)
     Rmin = float(R_outer.min() - margin_RZ)
@@ -369,7 +290,6 @@ def solve_with_continuation(tokamak, geom, CS, PF1, PF2, PF3, *,
         Zmin=Zmin, Zmax=Zmax,
         nx=int(nx), ny=int(ny),
     )
-
     solver = GSstaticsolver.NKGSsolver(eq)
 
     ctx = None
@@ -382,11 +302,7 @@ def solve_with_continuation(tokamak, geom, CS, PF1, PF2, PF3, *,
 
     try:
         for f in f_list:
-            apply_star_family_currents(
-                tokamak,
-                f * CS, f * PF1, f * PF2, f * PF3,
-                mode=str(coil_group_mode),
-            )
+            apply_star_family_currents(tokamak, f*CS, f*PF1, f*PF2, f*PF3, mode=coil_group_mode)
 
             profiles = ConstrainPaxisIp(
                 eq=eq,
@@ -396,9 +312,9 @@ def solve_with_continuation(tokamak, geom, CS, PF1, PF2, PF3, *,
                 alpha_m=float(alpha_m),
                 alpha_n=float(alpha_n),
             )
-
             _ensure_profile_masks(profiles, eq, force=True)
 
+            # retry on copy(None)
             for attempt in range(2):
                 try:
                     solver.solve(
@@ -411,43 +327,30 @@ def solve_with_continuation(tokamak, geom, CS, PF1, PF2, PF3, *,
                     break
                 except TypeError as e:
                     msg = str(e)
-                    if ("Cannot copy" in msg and "NoneType" in msg) or ("without deepcopying" in msg):
+                    if ("NoneType" in msg and "Cannot copy" in msg) or ("without deepcopying" in msg):
                         _ensure_profile_masks(profiles, eq, force=True)
                         if attempt == 1:
                             raise
                         continue
                     raise
-
     finally:
         if ctx is not None:
             ctx.close()
 
-    # Extract LCFS from limiter/wall
-    shape = shape_from_lcfs_limiter(eq, geom, prefer_inner=bool(prefer_inner), psi_percentile=float(psi_percentile))
-
-    # Add axis
-    R_ax, Z_ax = eq.magneticAxis()[:2]
-    shape["R_ax"] = float(R_ax)
-    shape["Z_ax"] = float(Z_ax)
-
+    shape = shape_from_lcfs_limiter(eq, geom, prefer_inner=prefer_inner_limiter)
     return eq, shape
 
 
 # -------------------------
-# Persistent worker process
+# Persistent worker
 # -------------------------
 
 def _worker_main(in_q, out_q, init_payload):
     try:
-        # Ensure headless matplotlib in spawned workers (Windows)
-        import matplotlib
-        matplotlib.use("Agg", force=True)
-
         import warnings
-        warnings.filterwarnings("ignore", category=RuntimeWarning, message="divide by zero encountered*")
-        warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered*")
+        warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-        from star_machine_cad import make_star_machine_from_cad, CADImportOptions, CADLayers
+        from star_machine_cad import make_star_machine_from_cad, CADImportOptions
 
         opts = CADImportOptions(
             unit_scale=init_payload["unit_scale"],
@@ -464,7 +367,6 @@ def _worker_main(in_q, out_q, init_payload):
 
         tokamak, geom = make_star_machine_from_cad(
             dxf_path=init_payload["dxf_path"],
-            layers=CADLayers(),
             opts=opts,
             strict_expected=True,
         )
@@ -472,7 +374,7 @@ def _worker_main(in_q, out_q, init_payload):
         _patch_profiles_copy_once()
         _patch_copy_into_allow_none_once()
 
-        required = ("R0_plasma", "A_plasma", "kappa_plasma", "delta_u", "delta_l", "a_plasma")
+        required = ("R0_plasma","A_plasma","kappa_plasma","delta_u","delta_l","a_plasma","R_ax","Z_ax","psi_axis","psi_lcfs","axis_is_min")
 
         while True:
             msg = in_q.get()
@@ -486,32 +388,30 @@ def _worker_main(in_q, out_q, init_payload):
                 eq, shape = solve_with_continuation(
                     tokamak, geom,
                     payload["CS"], payload["PF1"], payload["PF2"], payload["PF3"],
-                    nx=payload["nx"],
-                    ny=payload["ny"],
-                    Ip=payload["Ip"],
-                    paxis=payload["paxis"],
-                    fvac=payload["fvac"],
-                    alpha_m=payload["alpha_m"],
-                    alpha_n=payload["alpha_n"],
+                    nx=payload["nx"], ny=payload["ny"],
+                    Ip=payload["Ip"], paxis=payload["paxis"], fvac=payload["fvac"],
+                    alpha_m=payload["alpha_m"], alpha_n=payload["alpha_n"],
                     target_rel_tol=payload["target_rel_tol"],
                     margin_RZ=payload["margin_RZ"],
                     f_list=payload["f_list"],
-                    silence_solver=payload["silence_solver"],
                     coil_group_mode=payload["coil_group_mode"],
-                    prefer_inner=payload["prefer_inner"],
-                    psi_percentile=payload["psi_percentile"],
+                    prefer_inner_limiter=payload["prefer_inner_limiter"],
+                    silence_solver=payload["silence_solver"],
                 )
 
-                # Validate shape keys
                 if not all(k in shape for k in required):
                     raise RuntimeError(f"shape missing keys; got={list(shape.keys())}")
 
-                stage = str(payload.get("stage", "coarse"))
-                misfit = compute_misfit(eq, geom, shape, stage=stage, targets=payload["targets"])
+                stage = str(payload.get("stage","coarse"))
+                misfit = compute_misfit(
+                    eq, shape, stage=stage,
+                    R0_target=payload["R0_target"],
+                    A_target=payload["A_target"],
+                    kappa_target=payload["kappa_target"],
+                    delta_target=payload["delta_target"],
+                )
 
-                R_ax, Z_ax = eq.magneticAxis()[:2]
                 elapsed = time.perf_counter() - t0
-
                 out_q.put((case_id, {
                     "ok": True,
                     "stage": stage,
@@ -520,9 +420,7 @@ def _worker_main(in_q, out_q, init_payload):
                     "PF1": float(payload["PF1"]),
                     "PF2": float(payload["PF2"]),
                     "PF3": float(payload["PF3"]),
-                    "R_ax": float(R_ax),
-                    "Z_ax": float(Z_ax),
-                    "shape": {k: float(shape[k]) for k in required},
+                    "shape": {k: (bool(shape[k]) if isinstance(shape[k], bool) else float(shape[k])) for k in required},
                     "elapsed_s": float(elapsed),
                     "coil_group_mode": str(payload["coil_group_mode"]),
                 }))
@@ -531,14 +429,14 @@ def _worker_main(in_q, out_q, init_payload):
                 elapsed = time.perf_counter() - t0
                 out_q.put((case_id, {
                     "ok": False,
-                    "stage": str(payload.get("stage", "unknown")),
+                    "stage": str(payload.get("stage","unknown")),
                     "error": repr(e),
                     "elapsed_s": float(elapsed),
                     "CS": float(payload.get("CS", np.nan)),
                     "PF1": float(payload.get("PF1", np.nan)),
                     "PF2": float(payload.get("PF2", np.nan)),
                     "PF3": float(payload.get("PF3", np.nan)),
-                    "coil_group_mode": str(payload.get("coil_group_mode", "area")),
+                    "coil_group_mode": str(payload.get("coil_group_mode","?")),
                 }))
 
     except Exception as e:
@@ -558,20 +456,14 @@ class CaseRunner:
     def _start(self):
         self.in_q = self.ctx.Queue()
         self.out_q = self.ctx.Queue()
-        self.proc = self.ctx.Process(
-            target=_worker_main,
-            args=(self.in_q, self.out_q, self.init_payload),
-            daemon=True,
-        )
+        self.proc = self.ctx.Process(target=_worker_main, args=(self.in_q, self.out_q, self.init_payload), daemon=True)
         self.proc.start()
 
     def stop(self):
         try:
             if self.in_q is not None:
-                try:
-                    self.in_q.put(None)
-                except Exception:
-                    pass
+                try: self.in_q.put(None)
+                except Exception: pass
             if self.proc is not None and self.proc.is_alive():
                 self.proc.terminate()
                 self.proc.join(timeout=2.0)
@@ -603,108 +495,80 @@ class CaseRunner:
             if remaining <= 0:
                 self.restart()
                 return None, "timeout"
-
             try:
                 got_cid, res = self.out_q.get(timeout=min(0.25, remaining))
             except queue.Empty:
                 continue
-            except KeyboardInterrupt:
-                self.stop()
-                raise
-
             if got_cid != cid:
                 continue
-
             if "elapsed_s" not in res or res["elapsed_s"] is None:
                 res["elapsed_s"] = float(time.perf_counter() - t0)
-
             if not res.get("ok", False):
                 return None, res.get("error", "unknown")
-
             return res, None
 
-
-# -------------------------
-# Sampling
-# -------------------------
 
 def sample_box(center: np.ndarray, halfspan: np.ndarray, n: int, rng: np.random.Generator):
     u = rng.uniform(-1.0, 1.0, size=(int(n), 4))
     return center[None, :] + u * halfspan[None, :]
 
-def sample_uniform(bounds_lo: np.ndarray, bounds_hi: np.ndarray, n: int, rng: np.random.Generator):
-    u = rng.uniform(0.0, 1.0, size=(int(n), 4))
-    return bounds_lo[None, :] + u * (bounds_hi - bounds_lo)[None, :]
-
-
-# -------------------------
-# Main
-# -------------------------
 
 def main():
-    # Bounds in A (family totals)
-    bounds_lo = 1e6 * np.array([0.2,  -2.0,  -2.0,  -0.5], dtype=float)
-    bounds_hi = 1e6 * np.array([2.5,   0.6,   1.2,   2.5], dtype=float)
-
-    def clip_samples(x):
-        return np.minimum(np.maximum(x, bounds_lo[None, :]), bounds_hi[None, :])
-
-    ap = argparse.ArgumentParser(add_help=True)
-
+    ap = argparse.ArgumentParser()
     ap.add_argument("--dxf", default=None)
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--timeout", type=float, default=60.0)
 
-    ap.add_argument("--n1", type=int, default=500)
-    ap.add_argument("--n2", type=int, default=900)
-    ap.add_argument("--topk", type=int, default=6)
-
-    ap.add_argument("--timeout", type=float, default=45.0)
-    ap.add_argument("--workers", type=int, default=2)
+    ap.add_argument("--n1", type=int, default=600)
+    ap.add_argument("--n2", type=int, default=1200)
+    ap.add_argument("--topk", type=int, default=8)
 
     ap.add_argument("--out", default=None)
     ap.add_argument("--truncate", action="store_true")
 
-    # CAD options
+    # CAD import
     ap.add_argument("--unit-scale", type=float, default=None)
-    ap.add_argument("--resample-walls", default="auto", choices=["auto", "always", "never"])
+    ap.add_argument("--resample-walls", default="auto", choices=["auto","always","never"])
     ap.add_argument("--n-wall", type=int, default=801)
     ap.add_argument("--n-inner", type=int, default=801)
     ap.add_argument("--min-wall-pts", type=int, default=200)
 
-    # Family distribution mode
-    ap.add_argument("--coil-group-mode", default=None, choices=["area", "equal", "same"])
+    ap.add_argument("--coil-group-mode", default=None, choices=["area","equal","same"])
+    ap.add_argument("--prefer-inner-limiter", action="store_true", help="Use inner wall as limiter if available")
+    ap.add_argument("--silence-solver", action="store_true")
 
-    # LCFS-limiter extraction settings
-    ap.add_argument("--prefer-inner", action="store_true", help="Prefer inner wall (limiter) if available")
-    ap.add_argument("--psi-percentile", type=float, default=5.0, help="Percentile for wall-psi boundary estimate")
-
-    # STAR-like targets (override-able)
+    # Targets (STAR-like)
     ap.add_argument("--R0-target", type=float, default=4.0)
     ap.add_argument("--A-target", type=float, default=2.0)
     ap.add_argument("--kappa-target", type=float, default=2.5)
-    ap.add_argument("--delta-target", type=float, default=0.20)
+    ap.add_argument("--delta-target", type=float, default=0.25)
 
-    # Stage 1 sampling controls
-    ap.add_argument("--global-frac", type=float, default=0.65, help="fraction of n1 taken as global uniform samples")
+    # Bounds (A)
+    ap.add_argument("--CS-lo", type=float, default=0.0)
+    ap.add_argument("--CS-hi", type=float, default=2.0)
+    ap.add_argument("--PF1-lo", type=float, default=-2.0)
+    ap.add_argument("--PF1-hi", type=float, default=1.0)
+    ap.add_argument("--PF2-lo", type=float, default=-2.0)
+    ap.add_argument("--PF2-hi", type=float, default=1.5)
+    ap.add_argument("--PF3-lo", type=float, default=-1.0)
+    ap.add_argument("--PF3-hi", type=float, default=2.0)
 
-    # Local spans (MA)
-    ap.add_argument("--span-CS",  type=float, default=0.70)
-    ap.add_argument("--span-PF1", type=float, default=1.20)
-    ap.add_argument("--span-PF2", type=float, default=1.60)
-    ap.add_argument("--span-PF3", type=float, default=1.60)
+    # Spans for sampling around center (MA)
+    ap.add_argument("--span-CS",  type=float, default=0.8)
+    ap.add_argument("--span-PF1", type=float, default=0.9)
+    ap.add_argument("--span-PF2", type=float, default=0.9)
+    ap.add_argument("--span-PF3", type=float, default=0.9)
 
-    # Solver settings per stage
-    ap.add_argument("--nx1", type=int, default=29)
-    ap.add_argument("--ny1", type=int, default=57)
-    ap.add_argument("--tol1", type=float, default=5e-4)
-    ap.add_argument("--f1", type=float, nargs="*", default=[0.20, 0.55, 1.0])
-
+    # Coarse/refine solver settings
+    ap.add_argument("--nx1", type=int, default=33)
+    ap.add_argument("--ny1", type=int, default=65)
+    ap.add_argument("--tol1", type=float, default=3e-4)
     ap.add_argument("--nx2", type=int, default=65)
     ap.add_argument("--ny2", type=int, default=129)
-    ap.add_argument("--tol2", type=float, default=2e-5)
-    ap.add_argument("--f2", type=float, nargs="*", default=[0.10, 0.20, 0.35, 0.50, 0.65, 0.78, 0.90, 1.0])
-
-    ap.add_argument("--silence-solver", action="store_true")
+    ap.add_argument("--tol2", type=float, default=1e-5)
+    ap.add_argument("--f1", type=float, nargs="*", default=[0.20, 0.55, 1.00])
+    ap.add_argument("--f2", type=float, nargs="*", default=[0.10, 0.20, 0.35, 0.50, 0.65, 0.78, 0.90, 1.00])
 
     args = ap.parse_args()
     mp.freeze_support()
@@ -713,22 +577,27 @@ def main():
     out_dir = _results_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    jsonl_path = Path(args.out) if args.out else (out_dir / "scan_opt_results.jsonl")
+    jsonl_path = Path(args.out) if args.out else (out_dir / "scan_star_like_results.jsonl")
     if args.truncate:
-        with open(jsonl_path, "w", encoding="utf-8") as f:
-            f.write("")
+        jsonl_path.write_text("", encoding="utf-8")
+    best_txt = out_dir / "scan_star_like_best.txt"
 
-    best_txt = out_dir / "scan_opt_best.txt"
     rng = np.random.default_rng(int(args.seed))
 
-    # Center: use cfg currents if present, but stage1 also samples globally anyway.
-    CS0  = float(getattr(cfg, "CS_current", 1.2e6))
-    PF10 = float(getattr(cfg, "PF1_current", -8.0e5))
-    PF20 = float(getattr(cfg, "PF2_current", -3.0e5))
-    PF30 = float(getattr(cfg, "PF3_current",  8.0e5))
+    # center: usa cfg si existe, pero no depende de geometría fija
+    CS0  = float(getattr(cfg, "CS_current", 0.8e6))
+    PF10 = float(getattr(cfg, "PF1_current", -0.8e6))
+    PF20 = float(getattr(cfg, "PF2_current", -0.3e6))
+    PF30 = float(getattr(cfg, "PF3_current",  0.6e6))
     center = np.array([CS0, PF10, PF20, PF30], dtype=float)
 
     halfspan = 1e6 * np.array([args.span_CS, args.span_PF1, args.span_PF2, args.span_PF3], dtype=float)
+
+    bounds_lo = 1e6*np.array([args.CS_lo,  args.PF1_lo, args.PF2_lo, args.PF3_lo], float)
+    bounds_hi = 1e6*np.array([args.CS_hi,  args.PF1_hi, args.PF2_hi, args.PF3_hi], float)
+
+    def clip_samples(x):
+        return np.minimum(np.maximum(x, bounds_lo[None,:]), bounds_hi[None,:])
 
     coil_group_mode = args.coil_group_mode
     if coil_group_mode is None:
@@ -748,8 +617,6 @@ def main():
         label_match_factor=2.0,
     )
 
-    targets = dict(R0=float(args.R0_target), A=float(args.A_target), kappa=float(args.kappa_target), delta=float(args.delta_target))
-
     base_params = dict(
         margin_RZ=float(getattr(cfg, "margin_RZ", 0.5)),
         Ip=float(getattr(cfg, "Ip", 8.0e5)),
@@ -759,9 +626,11 @@ def main():
         alpha_n=float(getattr(cfg, "alpha_n", 1.2)),
         silence_solver=bool(args.silence_solver),
         coil_group_mode=str(coil_group_mode),
-        prefer_inner=bool(args.prefer_inner),
-        psi_percentile=float(args.psi_percentile),
-        targets=targets,
+        prefer_inner_limiter=bool(args.prefer_inner_limiter),
+        R0_target=float(args.R0_target),
+        A_target=float(args.A_target),
+        kappa_target=float(args.kappa_target),
+        delta_target=float(args.delta_target),
     )
 
     n_workers = max(1, int(args.workers))
@@ -779,21 +648,8 @@ def main():
         t0 = time.perf_counter()
         res, err = runner.run_case(payload, timeout_s=float(args.timeout))
         elapsed = time.perf_counter() - t0
-
         if res is None:
-            return {
-                "ok": False,
-                "tag": tag,
-                "stage": str(payload.get("stage", "unknown")),
-                "CS": float(payload["CS"]),
-                "PF1": float(payload["PF1"]),
-                "PF2": float(payload["PF2"]),
-                "PF3": float(payload["PF3"]),
-                "elapsed_s": float(elapsed),
-                "error": str(err),
-                "coil_group_mode": str(payload.get("coil_group_mode", "area")),
-            }
-
+            return dict(ok=False, tag=tag, error=str(err), elapsed_s=float(elapsed), **{k: float(payload[k]) for k in ["CS","PF1","PF2","PF3"]})
         rec = dict(res)
         rec["tag"] = tag
         rec["elapsed_s"] = float(rec.get("elapsed_s", elapsed))
@@ -820,121 +676,79 @@ def main():
 
         done = 0
         with ThreadPoolExecutor(max_workers=n_workers) as ex:
-            futs = []
-            for i, payload in enumerate(payloads):
-                runner = runners[i % n_workers]
-                futs.append(ex.submit(run_one, runner, payload, tag))
-
+            futs = [ex.submit(run_one, runners[i % n_workers], payloads[i], tag) for i in range(tried)]
             for fut in as_completed(futs):
                 rec = fut.result()
                 log_jsonl(rec)
                 done += 1
-
                 with print_lock:
-                    if rec["ok"]:
+                    if rec.get("ok", False):
                         ok_count += 1
                         if best is None or rec["misfit"] < best["misfit"]:
                             best = rec
                         top_ok.append(rec)
-                        print(f"[{tag}] {done:4d}/{tried} OK   misfit={rec['misfit']:.3e}  elapsed={rec['elapsed_s']:.2f}s", flush=True)
+                        print(f"[{tag}] {done:4d}/{tried} OK   misfit={rec['misfit']:.3e}  t={rec['elapsed_s']:.1f}s", flush=True)
                     else:
-                        print(f"[{tag}] {done:4d}/{tried} FAIL {rec.get('error','?')}  elapsed={rec['elapsed_s']:.2f}s", flush=True)
+                        print(f"[{tag}] {done:4d}/{tried} FAIL {rec.get('error','?')}  t={rec.get('elapsed_s',0):.1f}s", flush=True)
 
         top_ok.sort(key=lambda r: r["misfit"])
-        top_ok = top_ok[:max(1, int(args.topk))]
-        return best, ok_count, tried, top_ok
+        return best, ok_count, tried, top_ok[:max(1, int(args.topk))]
 
     try:
-        # -------------------------
-        # Stage 1 (coarse) - GLOBAL + LOCAL mix
-        # -------------------------
-        n1 = int(args.n1)
-        frac = float(args.global_frac)
-        n1g = max(1, int(round(frac * n1)))
-        n1l = max(1, n1 - n1g)
-
-        samples_global = sample_uniform(bounds_lo, bounds_hi, n1g, rng)
-        samples_local  = sample_box(center, halfspan, n1l, rng)
-        samples1 = clip_samples(np.vstack([samples_global, samples_local]))
-
-        best1, ok1, tried1, top1 = eval_samples(
-            samples1,
-            tag="coarse",
-            stage="coarse",
-            nx=int(args.nx1), ny=int(args.ny1),
-            tol=float(args.tol1),
-            f_list=tuple(args.f1),
-        )
+        # Stage 1: coarse
+        samples1 = clip_samples(sample_box(center, halfspan, int(args.n1), rng))
+        best1, ok1, tried1, top1 = eval_samples(samples1, tag="coarse", stage="coarse",
+                                                nx=int(args.nx1), ny=int(args.ny1), tol=float(args.tol1),
+                                                f_list=tuple(args.f1))
 
         print("\n=== Stage 1 (coarse) ===")
         print(f"Tried: {tried1} | OK: {ok1}")
         if best1 is None:
-            print("No convergent equilibria found in coarse stage.")
-            print("Try: increase timeout, widen bounds/spans, or loosen tol1, or use fewer nx/ny.")
+            print("No valid equilibria found (likely LCFS extraction rejected them).")
             return
 
-        print(f"Best misfit (coarse): {best1['misfit']:.4e}")
-        print(f"CS={best1['CS']/1e6:.3f} MA | PF1={best1['PF1']/1e6:.3f} MA | PF2={best1['PF2']/1e6:.3f} MA | PF3={best1['PF3']/1e6:.3f} MA")
-        print("Shape:", best1["shape"])
-
-        # -------------------------
-        # Stage 2 (refine) around Top-K coarse
-        # -------------------------
+        # Stage 2: refine around top-k
         halfspan2 = 0.25 * halfspan
-        centers = [np.array([r["CS"], r["PF1"], r["PF2"], r["PF3"]], dtype=float) for r in top1]
-
+        centers = [np.array([r["CS"], r["PF1"], r["PF2"], r["PF3"]], float) for r in top1]
         n_cent = max(1, len(centers))
         n2_per = max(80, int(int(args.n2) // n_cent))
 
         best2 = None
         ok2_total = 0
         tried2_total = 0
-
         for j, c in enumerate(centers, start=1):
             samples2 = clip_samples(sample_box(c, halfspan2, n2_per, rng))
-
-            b, ok2, tried2, _ = eval_samples(
-                samples2,
-                tag=f"refine{j}",
-                stage="refine",
-                nx=int(args.nx2), ny=int(args.ny2),
-                tol=float(args.tol2),
-                f_list=tuple(args.f2),
-            )
-
+            b, ok2, tried2, _ = eval_samples(samples2, tag=f"refine{j}", stage="refine",
+                                             nx=int(args.nx2), ny=int(args.ny2), tol=float(args.tol2),
+                                             f_list=tuple(args.f2))
             ok2_total += ok2
             tried2_total += tried2
             if b is not None and (best2 is None or b["misfit"] < best2["misfit"]):
                 best2 = b
 
-        print("\n=== Stage 2 (refine) ===")
-        print(f"Tried: {tried2_total} | OK: {ok2_total}")
-
-        best = best1 if (best2 is None or best1["misfit"] <= best2["misfit"]) else best2
+        best = best2 if (best2 is not None and best2["misfit"] < best1["misfit"]) else best1
 
         print("\n=== BEST OVERALL ===")
-        print(f"targets: R0={targets['R0']:.3f} A={targets['A']:.3f} kappa={targets['kappa']:.3f} delta={targets['delta']:.3f}")
         print(f"misfit = {best['misfit']:.6e}")
-        print(f"CS  = {best['CS']/1e6:.3f} MA (family total)")
-        print(f"PF1 = {best['PF1']/1e6:.3f} MA (family total)")
-        print(f"PF2 = {best['PF2']/1e6:.3f} MA (family total)")
-        print(f"PF3 = {best['PF3']/1e6:.3f} MA (family total)")
-        print(f"coil_group_mode = {coil_group_mode}")
-        print(f"R_ax = {best['R_ax']:.3f} m | Z_ax = {best['Z_ax']:.3f} m")
+        print(f"CS_total  = {best['CS']/1e6:.3f} MA")
+        print(f"PF1_total = {best['PF1']/1e6:.3f} MA")
+        print(f"PF2_total = {best['PF2']/1e6:.3f} MA")
+        print(f"PF3_total = {best['PF3']/1e6:.3f} MA")
+        print(f"coil_group_mode = {best.get('coil_group_mode','?')}")
         print("shape =", best["shape"])
 
         with open(best_txt, "w", encoding="utf-8") as g:
-            g.write("BEST EQUILIBRIUM FOUND (CAD OPT SCAN - STAR-LIKE)\n")
+            g.write("BEST EQUILIBRIUM FOUND (STAR-LIKE LCFS SCAN)\n")
             g.write(f"DXF: {dxf_path}\n")
+            g.write(f"seed: {int(args.seed)}\n")
+            g.write(f"workers: {int(args.workers)}\n")
             g.write(f"coil_group_mode: {coil_group_mode}\n")
-            g.write(f"targets: R0={targets['R0']} A={targets['A']} kappa={targets['kappa']} delta={targets['delta']}\n")
+            g.write(f"targets: R0={args.R0_target} A={args.A_target} kappa={args.kappa_target} delta={args.delta_target}\n")
             g.write(f"misfit: {best['misfit']:.6e}\n")
             g.write(f"CS_total:  {best['CS']:.6e} A\n")
             g.write(f"PF1_total: {best['PF1']:.6e} A\n")
             g.write(f"PF2_total: {best['PF2']:.6e} A\n")
             g.write(f"PF3_total: {best['PF3']:.6e} A\n")
-            g.write(f"R_ax: {best['R_ax']:.6f} m\n")
-            g.write(f"Z_ax: {best['Z_ax']:.6f} m\n")
             g.write("shape:\n")
             for k, v in best["shape"].items():
                 g.write(f"  {k}: {v}\n")

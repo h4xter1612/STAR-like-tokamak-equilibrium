@@ -35,16 +35,8 @@ AUTO plasma target + side-panel parameters:
   - Adds geometric xpoints markers + strike rays (plot-only, not magnetic)
   - Computes a full pack of geometric parameters from the boundary and prints/stores them
 
-BLANKET / passive filaments (NEW):
-  - Optional generation of many passive (I=0) rectangular "filament coils"
-    filling the region between WALL_INNER and WALL_OUTER uniformly.
-  - Controlled by blanket_* fields in CADImportOptions.
-  - Stored in geom["blanket_filaments"] as tuples:
-        (label, Rc, Zc, dR, dZ)
-
 NOTE:
-  - Plasma target parameters here are geometric (boundary) parameters,
-    NOT equilibrium (psi-based) diagnostics.
+  - These are geometric (boundary) parameters, NOT equilibrium (psi-based) diagnostics.
 """
 
 from __future__ import annotations
@@ -147,37 +139,6 @@ class CADImportOptions:
 
     # Strike line ray length cap (m) if intersection fails
     strike_ray_fallback_len: float = 3.0
-
-    # -------------------------
-    # BLANKET / passive filaments (AUTO between inner & outer wall)
-    # -------------------------
-    blanket_enabled: bool = False
-
-    # number of desired filaments
-    blanket_n_filaments: int = 0
-
-    # "stratified" (recommended), "grid", "random"
-    blanket_distribution: str = "stratified"
-    blanket_seed: int = 0
-
-    # extra margin away from walls (m) (added on top of filament size)
-    blanket_wall_margin_m: float = 0.01
-
-    # filament rectangle size (half-extents in m)
-    blanket_filament_dR: float = 0.004
-    blanket_filament_dZ: float = 0.004
-
-    # Only for stratified (if <=0 => auto)
-    blanket_bins_R: int = 0
-    blanket_bins_Z: int = 0
-
-    # Only for grid
-    blanket_pitch_mode: str = "auto"   # "auto" or "manual"
-    blanket_pitch_R: float = 0.03
-    blanket_pitch_Z: float = 0.03
-
-    blanket_label_prefix: str = "BLK"
-    blanket_containment_radius: float = -1e-9
 
 
 # -----------------------------
@@ -391,204 +352,6 @@ def _area_from_dR_dZ(dR: float, dZ: float) -> float:
 
 
 # -----------------------------
-# BLANKET filament generator (NEW)
-# -----------------------------
-
-def _blanket_region_mask(
-    pts: np.ndarray,
-    outer_open: np.ndarray,
-    inner_open: Optional[np.ndarray],
-    *,
-    margin: float,
-    outer_radius: float,
-    inner_radius: float,
-) -> np.ndarray:
-    """
-    Region = inside OUTER (shrunken by margin) AND outside INNER (inflated by margin).
-    """
-    pts = np.asarray(pts, float)
-    outer_path = MplPath(outer_open, closed=True)
-    inside_outer = outer_path.contains_points(pts, radius=float(outer_radius) - float(margin))
-
-    if inner_open is None or len(inner_open) < 3:
-        return inside_outer
-
-    inner_path = MplPath(inner_open, closed=True)
-    inside_inner = inner_path.contains_points(pts, radius=float(inner_radius) + float(margin))
-    return inside_outer & (~inside_inner)
-
-
-def _generate_blanket_centers(
-    outer_open: np.ndarray,
-    inner_open: Optional[np.ndarray],
-    *,
-    n: int,
-    distribution: str,
-    seed: int,
-    margin: float,
-    bins_R: int,
-    bins_Z: int,
-    pitch_mode: str,
-    pitch_R: float,
-    pitch_Z: float,
-    containment_radius: float,
-) -> np.ndarray:
-    """
-    Returns (n,2) centers (R,Z) approximately uniformly covering blanket region.
-    Distributions:
-      - stratified (recommended): cell-jitter sampling -> uniform coverage, low variance
-      - grid: regular lattice -> very uniform but can look patterned
-      - random: Monte Carlo -> OK, but for small N can cluster visually
-    """
-    outer_open = np.asarray(outer_open, float)
-    inner_open = None if inner_open is None else np.asarray(inner_open, float)
-
-    xmin, xmax, ymin, ymax = _bbox_from_poly(outer_open)
-    W = xmax - xmin
-    H = ymax - ymin
-    if W <= 0 or H <= 0:
-        raise ValueError("Outer wall bbox degenerate.")
-
-    rng = np.random.default_rng(int(seed))
-    dist = str(distribution).strip().lower()
-
-    outer_r = float(containment_radius)
-    inner_r = float(containment_radius)
-
-    def accept(P: np.ndarray) -> np.ndarray:
-        return _blanket_region_mask(
-            P, outer_open, inner_open,
-            margin=margin,
-            outer_radius=outer_r,
-            inner_radius=inner_r,
-        )
-
-    # ---- GRID
-    if dist == "grid":
-        pm = str(pitch_mode).strip().lower()
-        if pm == "manual":
-            dx = float(pitch_R)
-            dy = float(pitch_Z)
-        else:
-            area_bbox = W * H
-            pitch = np.sqrt(area_bbox / max(1, int(n)) / 1.25)
-            dx = dy = max(1e-6, float(pitch))
-
-        for _ in range(12):
-            xs = np.arange(xmin + 0.5 * dx, xmax, dx)
-            ys = np.arange(ymin + 0.5 * dy, ymax, dy)
-            XX, YY = np.meshgrid(xs, ys, indexing="xy")
-            P = np.column_stack([XX.ravel(), YY.ravel()])
-            M = accept(P)
-            Pin = P[M]
-            if Pin.shape[0] >= n:
-                idx = np.linspace(0, Pin.shape[0] - 1, n).astype(int)
-                return Pin[idx]
-            dx *= 0.85
-            dy *= 0.85
-
-        # fallback
-        dist = "stratified"
-
-    # ---- STRATIFIED (RECOMMENDED)
-    if dist == "stratified":
-        if int(bins_R) <= 0 or int(bins_Z) <= 0:
-            aspect = W / (H + 1e-30)
-            nR = int(np.ceil(np.sqrt(n * aspect)))
-            nZ = int(np.ceil(n / max(1, nR)))
-        else:
-            nR = int(bins_R)
-            nZ = int(bins_Z)
-
-        dx = W / max(1, nR)
-        dy = H / max(1, nZ)
-
-        out: List[Tuple[float, float]] = []
-        for pass_id in range(20):
-            cells = [(i, j) for i in range(nR) for j in range(nZ)]
-            rng.shuffle(cells)
-
-            for (i, j) in cells:
-                x0 = xmin + i * dx
-                y0 = ymin + j * dy
-                x = x0 + rng.random() * dx
-                y = y0 + rng.random() * dy
-                P = np.array([[x, y]], float)
-                if accept(P)[0]:
-                    out.append((float(x), float(y)))
-                    if len(out) >= n:
-                        return np.asarray(out, float)
-
-            # if not enough points, refine bins
-            if len(out) < n and pass_id in (3, 7, 11):
-                nR = int(np.ceil(nR * 1.25))
-                nZ = int(np.ceil(nZ * 1.25))
-                dx = W / max(1, nR)
-                dy = H / max(1, nZ)
-
-        dist = "random"
-
-    # ---- RANDOM
-    out2: List[Tuple[float, float]] = []
-    for _ in range(250):
-        batch = max(2000, 5 * (n - len(out2)))
-        P = np.column_stack([rng.uniform(xmin, xmax, batch), rng.uniform(ymin, ymax, batch)])
-        M = accept(P)
-        Pin = P[M]
-        for p in Pin:
-            out2.append((float(p[0]), float(p[1])))
-            if len(out2) >= n:
-                return np.asarray(out2, float)
-
-    raise ValueError("Could not generate enough blanket filament centers; check walls/margin/filament size.")
-
-
-def _build_blanket_filaments(
-    outer_xy_closed: np.ndarray,
-    inner_xy_closed: Optional[np.ndarray],
-    *,
-    opts: CADImportOptions,
-) -> List[Tuple[str, float, float, float, float]]:
-    """
-    Returns list of (label, Rc, Zc, dR, dZ)
-    """
-    n = int(getattr(opts, "blanket_n_filaments", 0))
-    if n <= 0:
-        return []
-
-    dR = float(getattr(opts, "blanket_filament_dR", 0.004))
-    dZ = float(getattr(opts, "blanket_filament_dZ", 0.004))
-
-    wall_margin = float(getattr(opts, "blanket_wall_margin_m", 0.0))
-    eff_margin = wall_margin + 1.05 * max(dR, dZ)
-
-    outer_open = _drop_duplicate_endpoint(outer_xy_closed)
-    inner_open = None if inner_xy_closed is None else _drop_duplicate_endpoint(inner_xy_closed)
-
-    centers = _generate_blanket_centers(
-        outer_open,
-        inner_open,
-        n=n,
-        distribution=str(getattr(opts, "blanket_distribution", "stratified")),
-        seed=int(getattr(opts, "blanket_seed", 0)),
-        margin=eff_margin,
-        bins_R=int(getattr(opts, "blanket_bins_R", 0)),
-        bins_Z=int(getattr(opts, "blanket_bins_Z", 0)),
-        pitch_mode=str(getattr(opts, "blanket_pitch_mode", "auto")),
-        pitch_R=float(getattr(opts, "blanket_pitch_R", 0.03)),
-        pitch_Z=float(getattr(opts, "blanket_pitch_Z", 0.03)),
-        containment_radius=float(getattr(opts, "blanket_containment_radius", -1e-9)),
-    )
-
-    prefix = str(getattr(opts, "blanket_label_prefix", "BLK")).strip().upper()
-    fil = []
-    for i, (Rc, Zc) in enumerate(centers, start=1):
-        lab = f"{prefix}{i:05d}"
-        fil.append((lab, float(Rc), float(Zc), float(dR), float(dZ)))
-    return fil
-
-
-# -----------------------------
 # Geometry pack for plasma target
 # -----------------------------
 
@@ -669,6 +432,15 @@ def compute_plasma_geom_params(
 ) -> Dict[str, float]:
     """
     Compute geometric (purely boundary-based) parameters of a plasma contour.
+
+    Key results:
+      - bbox extrema (Rmin,Rmax,Zmin,Zmax), bbox center (R0_bbox, Z0_bbox)
+      - midplane cut (Z=Z0_ref or Z0_bbox): Rin_mid, Rout_mid, R0_mid, a_mid
+      - kappa_mid, b (vertical semi-axis), aspect ratio A_mid
+      - triangularity delta_u/delta_l w.r.t. R0_ref (or R0_mid)
+      - area_poloidal, perimeter_poloidal
+      - centroid (Rc_centroid,Zc_centroid)
+      - toroidal approximations: volume ~ 2π R0_mid * area, surface ~ 2π R0_mid * perimeter
     """
     pts = _drop_duplicate_endpoint(np.asarray(xy_closed, float))
     if len(pts) < 3:
@@ -925,7 +697,8 @@ def _auto_plasma_target_fit_inner(
             if s <= 1e-8:
                 continue
 
-            # Primary: maximize scale. Secondary: prefer larger delta, then symmetry.
+            # Primary objective: maximize scale (closest to requested A)
+            # Secondary: prefer larger delta (more D-like), then symmetry
             score = (s, 0.10 * (du + dl), -0.02 * abs(du - dl))
             if (best is None) or (score > best[0]):
                 best = (score, float(du), float(dl), float(s))
@@ -951,7 +724,7 @@ def _auto_plasma_target_fit_inner(
         )
 
     meta: Dict[str, float] = {
-        "mode": 1.0,
+        "mode": 1.0,  # numeric tag to keep meta float-friendly
         "R0_target": float(R0_t),
         "A_target": float(A_t),
         "kappa_target": float(kappa_t),
@@ -964,12 +737,14 @@ def _auto_plasma_target_fit_inner(
         "delta_l": float(dl_best),
     }
 
+    # Old quick estimates
     meta.update(_estimate_from_boundary(xy))
 
+    # Full geometry pack (prefix geom_)
     geom_pack = compute_plasma_geom_params(
         xy,
         Z0_ref=float(Z0_use),
-        R0_ref=float(R0_t),
+        R0_ref=float(R0_t),  # triangularity reported w.r.t. target R0
     )
     for k, v in geom_pack.items():
         if isinstance(v, (int, float, np.floating)):
@@ -1165,11 +940,6 @@ def load_geom_from_dxf(
             inner_xy = _rotate_to_outboard_midplane(inner_xy)
         inner_xy = _maybe_resample(inner_xy, opts.n_inner, opts.resample_walls, opts.min_wall_pts)
 
-    # ---- BLANKET filaments (AUTO between inner & outer)
-    blanket_filaments = []
-    if bool(getattr(opts, "blanket_enabled", False)):
-        blanket_filaments = _build_blanket_filaments(outer_xy, inner_xy, opts=opts)
-
     # ---- Plasma target: CAD or AUTO
     plasma_xy = None
     plasma_candidates = polylines_in_layer(layers.plasma_target)
@@ -1225,7 +995,7 @@ def load_geom_from_dxf(
             fallback_len=float(getattr(opts, "strike_ray_fallback_len", 3.0)),
         )
 
-    # ---- Coils (UNCHANGED)
+    # ---- Coils (UNCHANGED from your original)
     coils: Dict[str, Tuple[float, float, float, float]] = {}
 
     coil_polys: List[Tuple[str, np.ndarray]] = []
@@ -1326,18 +1096,6 @@ def load_geom_from_dxf(
     if strike_lines_target:
         geom["strike_lines_target"] = [np.asarray(L, float) for L in strike_lines_target]
 
-    if blanket_filaments:
-        geom["blanket_filaments"] = list(blanket_filaments)
-        geom["blanket_meta"] = dict(
-            n=int(len(blanket_filaments)),
-            distribution=str(getattr(opts, "blanket_distribution", "stratified")),
-            seed=int(getattr(opts, "blanket_seed", 0)),
-            wall_margin_m=float(getattr(opts, "blanket_wall_margin_m", 0.0)),
-            filament_dR=float(getattr(opts, "blanket_filament_dR", 0.004)),
-            filament_dZ=float(getattr(opts, "blanket_filament_dZ", 0.004)),
-            has_inner=bool(inner_xy is not None),
-        )
-
     # Basic derived numbers
     if "R_plasma" in geom:
         Rmin, Rmax = float(np.min(geom["R_plasma"])), float(np.max(geom["R_plasma"]))
@@ -1386,7 +1144,7 @@ def make_star_machine_from_cad(
 
     geom = load_geom_from_dxf(dxf, layers=layers, opts=opts)
 
-    # Optional strict coil check (ACTIVE coils only)
+    # Optional strict coil check
     if strict_expected:
         if expected_coils is None:
             expected_coils = {"CS", "PF1U", "PF1L", "PF2U", "PF2L", "PF3U", "PF3L"}
@@ -1421,23 +1179,6 @@ def make_star_machine_from_cad(
             pass
         coils_for_machine.append((lab, c))
 
-    # ---- Passive blanket filaments (current=0)
-    passive_labels: List[str] = []
-    if "blanket_filaments" in geom:
-        for (lab0, Rc, Zc, dR, dZ) in geom["blanket_filaments"]:
-            lab = _normalize_label(lab0)
-            c = machine.MultiCoil(float(Rc), float(Zc), float(dR), float(dZ))
-            try:
-                c.label = lab
-            except Exception:
-                pass
-            try:
-                c.current = 0.0
-            except Exception:
-                pass
-            coils_for_machine.append((lab, c))
-            passive_labels.append(lab)
-
     tokamak = _build_machine_compat(coils_for_machine, vessel_wall)
 
     if limiter is not None:
@@ -1446,10 +1187,8 @@ def make_star_machine_from_cad(
         except Exception:
             pass
 
-    active_labels = [_normalize_label(x) for x in geom["coils"].keys()]
-    tokamak.active_coils = list(active_labels)
-    tokamak.passive_coils = list(passive_labels)
-
+    tokamak.active_coils = [label for label, _ in coils_for_machine]
+    tokamak.passive_coils = []
     tokamak.R0 = float(geom.get("R0", np.nan))
     tokamak.geom = geom
     tokamak.coils_dict = {label: coil for label, coil in coils_for_machine}
@@ -1501,8 +1240,10 @@ def _format_plasma_meta_text(meta: Dict[str, float]) -> str:
     Create a compact, readable block with the most important geometric params + errors.
     """
     def g(k, default=np.nan):
-        return meta.get(k, default)
+        v = meta.get(k, default)
+        return v
 
+    # Prefer midplane-based geometry (geom_*)
     lines = []
     lines.append("PLASMA TARGET (geom)")
     lines.append("")
@@ -1597,13 +1338,6 @@ def plot_cad_geometry(geom: Dict, show: bool = True, ax=None):
     if "R_plasma" in geom:
         ax.plot(geom["R_plasma"], geom["Z_plasma"], color="tab:orange", lw=1.8, label="Plasma target (AUTO)")
 
-    # blanket filaments
-    if "blanket_filaments" in geom:
-        for (lab, Rc, Zc, dR, dZ) in geom["blanket_filaments"]:
-            x0, x1 = Rc - dR, Rc + dR
-            y0, y1 = Zc - dZ, Zc + dZ
-            ax.plot([x0, x1, x1, x0, x0], [y0, y0, y1, y1, y0], lw=0.2)
-
     # xpoints + strike lines (if present)
     if "xpoints_target" in geom:
         for (Rx, Zx, kind) in geom["xpoints_target"]:
@@ -1639,7 +1373,7 @@ def plot_cad_geometry(geom: Dict, show: bool = True, ax=None):
 # -----------------------------
 
 if __name__ == "__main__":
-    # Smoke test: AUTO plasma target + BLANKET filaments
+    # Smoke test: AUTO plasma target fit inside WALL_INNER (if exists)
     opts = CADImportOptions(
         unit_scale=None,
         resample_walls="auto",
@@ -1658,7 +1392,7 @@ if __name__ == "__main__":
         plasma_Z0=0.0,
         plasma_delta_max=0.70,
         plasma_delta_grid=17,
-        plasma_delta_symmetric=True,
+        plasma_delta_symmetric=True,   # set False if you want du/dl grid (slower)
         plasma_shrink_iters=20,
         plasma_scale_safety=0.999,
         containment_radius=-1e-9,
@@ -1666,14 +1400,6 @@ if __name__ == "__main__":
         center_search_samples=800,
         center_search_seed=0,
         strike_ray_fallback_len=3.0,
-
-        blanket_enabled=True,
-        blanket_n_filaments=2500,
-        blanket_distribution="stratified",
-        blanket_seed=0,
-        blanket_wall_margin_m=0.01,
-        blanket_filament_dR=0.004,
-        blanket_filament_dZ=0.004,
     )
 
     tokamak, geom = make_star_machine_from_cad(opts=opts, strict_expected=True)
@@ -1681,9 +1407,6 @@ if __name__ == "__main__":
     print("[INFO] Coils found:", sorted(list(geom["coils"].keys())))
     print("[INFO] Families:", {k: len(v) for k, v in (geom.get("coil_groups", {}) or {}).items()})
     print("[INFO] outer wall points:", len(geom["R_outer"]), "| inner wall points:", len(geom.get("R_inner", [])))
-
-    if "blanket_meta" in geom:
-        print("[INFO] blanket_meta:", geom["blanket_meta"])
 
     if "plasma_auto_meta" in geom:
         meta = geom["plasma_auto_meta"]
