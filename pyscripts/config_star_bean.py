@@ -1,4 +1,12 @@
 # config_star_bean.py
+#
+# Config central para STAR-like-tokamak-equilibrium
+# - Targets geométricos (Miller-like)
+# - Parámetros de equilibrio
+# - Import CAD + plasma target AUTO
+# - Blanket filaments (pasivos)
+# - Knobs del objective usado por scan_star_refine.py (CAD/diag)
+# - NUEVO: constraint "LCFS dentro de WALL_INNER"
 
 # ----------------------------
 # Target geometry (Miller-like)
@@ -11,15 +19,16 @@ delta_geom = 0.60
 # ----------------------------
 # Coil current grouping / distribution
 # ----------------------------
-coil_group_mode = "area"
+coil_group_mode = "area"   # "area" recomendado
 
 # ----------------------------
-# PF / CS currents (total family currents)
+# PF / CS currents (total family currents) [A]
 # ----------------------------
-CS_current  = 3.42117217541e6 # 0.6
-PF1_current = -1.5519747092e6
-PF2_current = 1.08449600097e6
-PF3_current = -0.0793341010901e6
+
+CS_current  = 6.730713e5
+PF1_current = -2.003520e5
+PF2_current = -6.612579e5
+PF3_current = 0.000000e0
 
 # ----------------------------
 # Plasma and profile parameters
@@ -45,7 +54,12 @@ margin_RZ = 0.5
 # ----------------------------
 target_rel_tol = 1e-5
 target_rel_tol_ramp = 2e-5
+
+# Continuation (recomendado para robustez):
 f_list_equilibrium = (0.15, 0.35, 0.65, 1.0)
+
+# Si quieres SOLO un paso (menos robusto, más fallos):
+# OJO: debe ser tupla de 1 elemento -> (1.0,)
 # f_list_equilibrium = (1.0,)
 
 # ----------------------------
@@ -112,6 +126,53 @@ blanket_pitch_Z = 0.03
 
 blanket_label_prefix = "BLK"
 blanket_containment_radius = -1e-9
+
+# ----------------------------
+# Objective knobs (scan_star_refine.py)
+# ----------------------------
+# Sigmas
+sig_R0_m  = 0.25
+sig_A     = 0.25
+sig_kappa = 0.25
+sig_delta = 0.20
+
+sig_x_m     = 0.20
+sig_shape_m = 0.05
+
+# Pesos
+w_scalar = 1.0
+w_x      = 1.0
+w_shape  = 1.0
+
+# Penalizaciones base
+penalty_no_separatrix  = 1e6
+penalty_no_xpoints     = 1e6
+penalty_fallback_lcfs  = 5e4
+penalty_neg_delta      = 10.0
+
+# Para refine tie-breaking / mejora mínima
+improve_eps = 1e-9
+
+# ----------------------------
+# NUEVO: constraint LCFS dentro de WALL_INNER
+# ----------------------------
+# Si no hay WALL_INNER en CAD, esto no aplica (frac_out_inner queda None).
+enforce_inner_wall = True
+
+# Tolerancia en fracción de puntos fuera (0.0 = estricto)
+inner_wall_frac_tol = 0.0
+
+# Si True -> hard fail si se sale (misfit fijo grande)
+inner_wall_hard_fail = False
+
+# Penalización soft: misfit += penalty_outside_inner * frac_out_inner
+penalty_outside_inner = 5e5
+
+# Penalización hard (si hard_fail=True)
+penalty_outside_inner_hard = 1e9
+
+# Igual que containment_radius: radius<0 hace “estricto” (puntos sobre pared cuentan como fuera)
+inner_containment_radius = -1e-9
 
 # ----------------------------
 # Output figure / file names

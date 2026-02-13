@@ -4,24 +4,20 @@ scan_star_refine.py
 Deterministic + adaptive local refinement of STAR coil FAMILY currents (CS, PF1, PF2, PF3)
 using a pattern-search / coordinate-descent scheme with step-size shrink.
 
-NEW in this version:
-- Per-iteration parallel evaluation of neighbors (deterministic decision after all complete).
-- Robust IPC using multiprocessing.Pipe (reduces "no_result_from_worker" issues).
-- CAD-aware objective:
-    * matches equilibrium plasma to CAD plasma_target (geom["R_plasma","Z_plasma"] if available)
-    * matches magnetic X-point(s) to CAD xpoints_target (geom["xpoints_target"])
-    * uses scalar targets from geom["plasma_auto_meta"] (R0/A/kappa/delta) as fallback
-    * optionally includes a curve-shape term when separatrix polyline exists in `shape`
+Key features:
+- Per-iteration parallel evaluation of neighbors (deterministic accept after all complete).
+- Robust subprocess eval with hard timeout per case.
+- Objectives:
+    * "cad": matches equilibrium plasma to CAD plasma_target + xpoints_target
+    * "diag": matches scalar targets from config_star_bean.py
 
-Fixes in this patch:
-- fallback_lcfs penalty is applied ONLY when explicitly flagged True (default False),
-  and the flag is logged in obj["fallback_lcfs"] for grepping.
-- dx_upper_m / dx_lower_m are None when not applicable (instead of NaN), printed as "n/a".
-
-Usage examples (Windows):
-  py .\scan_star_refine.py --init .\results\scan_multigoal_best_global.json --objective cad --null-mode lower --iter-workers 4 --max-iters 25 --timeout 140 --step0 0.3,0.3,0.3,0.3 --min-step 0.02 --verbose-evals
-
-  py .\scan_star_refine.py --objective diag --iter-workers 4 --max-iters 25
+NEW (important):
+- LCFS-inside-inner-wall constraint (if WALL_INNER exists in geom):
+    * Computes frac_out_inner = fraction of LCFS points outside the inner wall polygon
+    * If enforce_inner_wall=True:
+        - soft: misfit += penalty_outside_inner * frac_out_inner
+        - hard: returns penalty_outside_inner_hard if frac_out_inner > tol
+    * Logs frac_out_inner inside obj dict, and prints it in verbose-evals.
 
 Notes:
 - Currents from JSON are read as MA and converted to A internally.
@@ -40,6 +36,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List
 
 import numpy as np
+from matplotlib.path import Path as MplPath
 
 
 # ----------------------------
@@ -84,10 +81,6 @@ def _safe_float(x: Any, default: float = float("nan")) -> float:
         return float(x)
     except Exception:
         return default
-
-
-def _norm2(v: np.ndarray) -> float:
-    return float(np.sqrt(float(np.sum(v * v))))
 
 
 def _fmt_num(x: Any) -> str:
@@ -152,14 +145,12 @@ def _extract_fallback_lcfs_flag(shape: Dict[str, Any], diag: Dict[str, Any]) -> 
             if bb is not None:
                 return bool(bb)
 
-        # If there is a textual reason that clearly indicates fallback/limiter usage.
         reason = cand.get("reason", None)
         if isinstance(reason, str):
             r = reason.lower()
             if ("fallback" in r) or ("limiter" in r):
                 return True
 
-    # Unknown format -> do NOT penalize by default
     return False
 
 
@@ -197,7 +188,6 @@ def _rms_chamfer_sym(P: np.ndarray, Q: np.ndarray) -> float:
 def _extract_lcfs_curve_from_shape(shape: Dict[str, Any]) -> Optional[np.ndarray]:
     """
     Try to pull a separatrix/LCFS polyline from shape.
-    If your analyze module uses different keys, add them here.
     """
     key_pairs = [
         ("R_sep", "Z_sep"),
@@ -229,7 +219,6 @@ def _extract_xpoints(shape: Dict[str, Any], diag: Dict[str, Any]) -> List[Tuple[
     """
     out: List[Tuple[float, float]] = []
 
-    # 1) shape-based
     xp = shape.get("xpoints", None)
     if xp is None:
         xp = shape.get("xpoint", None) or shape.get("Xpoints", None)
@@ -260,7 +249,6 @@ def _extract_xpoints(shape: Dict[str, Any], diag: Dict[str, Any]) -> List[Tuple[
     if out:
         return out
 
-    # 2) diag-based fallback (if your diagnostics store them)
     candidates = [
         ("Rx_lower", "Zx_lower"),
         ("Rx_upper", "Zx_upper"),
@@ -322,6 +310,26 @@ def _targets_from_geom(geom: Dict[str, Any]) -> Tuple[Optional[np.ndarray], Dict
 
 
 # ----------------------------
+# Inner wall constraint helpers
+# ----------------------------
+def _frac_outside(points: np.ndarray, wall_open: np.ndarray, radius: float = -1e-9) -> float:
+    """
+    points: (N,2) to test (LCFS)
+    wall_open: (M,2) polygon vertices (open) defining inner wall
+    returns fraction of points outside wall polygon.
+    """
+    P = np.asarray(points, float)
+    W = np.asarray(wall_open, float)
+    if P.ndim != 2 or W.ndim != 2 or P.shape[1] != 2 or W.shape[1] != 2:
+        return float("nan")
+    if P.shape[0] < 10 or W.shape[0] < 3:
+        return float("nan")
+    path = MplPath(W, closed=True)
+    inside = path.contains_points(P, radius=float(radius))
+    return float(1.0 - np.mean(inside))
+
+
+# ----------------------------
 # Objectives
 # ----------------------------
 def _misfit_diag(diag: Dict[str, Any], cfg: Any) -> Tuple[float, Dict[str, Any]]:
@@ -362,7 +370,6 @@ def _misfit_diag(diag: Dict[str, Any], cfg: Any) -> Tuple[float, Dict[str, Any]]
 
     misfit = float(math.sqrt(term))
 
-    # penalties
     pen_neg = float(getattr(cfg, "penalty_neg_delta", 10.0))
     if du < 0.0 or dl < 0.0:
         misfit += pen_neg * (abs(min(du, 0.0)) + abs(min(dl, 0.0)))
@@ -393,6 +400,7 @@ def _misfit_cad(geom: Dict[str, Any], shape: Dict[str, Any], diag: Dict[str, Any
       - scalar mismatch vs CAD plasma_auto_meta targets (midplane R0/A/kappa/delta) if present
       - xpoint mismatch vs geom["xpoints_target"]
       - optional curve mismatch if separatrix curve is available in shape
+      - NEW: inner wall constraint (LCFS inside WALL_INNER if available)
     """
     # knobs
     sig_R0 = float(getattr(cfg, "sig_R0_m", 0.25))
@@ -411,26 +419,34 @@ def _misfit_cad(geom: Dict[str, Any], shape: Dict[str, Any], diag: Dict[str, Any
     penalty_no_xp    = float(getattr(cfg, "penalty_no_xpoints", 1e6))
     penalty_fallback = float(getattr(cfg, "penalty_fallback_lcfs", 5e4))
 
+    # inner wall constraint knobs
+    enforce_inner = bool(getattr(cfg, "enforce_inner_wall", True))
+    inner_tol = float(getattr(cfg, "inner_wall_frac_tol", 0.0))
+    inner_hard = bool(getattr(cfg, "inner_wall_hard_fail", False))
+    pen_out = float(getattr(cfg, "penalty_outside_inner", 5e5))
+    pen_out_hard = float(getattr(cfg, "penalty_outside_inner_hard", 1e9))
+    inner_radius = float(getattr(cfg, "inner_containment_radius", -1e-9))
+
     # targets from geom
     target_curve, xt, scal = _targets_from_geom(geom)
     if (not diag) or (not diag.get("ok", False)):
         return 1e9, {"mode": "cad", "ok": False, "reason": "diag_not_ok"}
 
-    # require separatrix?
     ok_sep = bool(shape.get("ok_sep", False))
     if not ok_sep:
-        # diverted requirement: hard fail
         return penalty_no_sep, {"mode": "cad", "ok": False, "reason": "no_separatrix"}
 
-    # scalar term: use CAD midplane targets if present, else fallback to cfg targets
-    # CAD
+    # Extract LCFS curve once (used for shape term and inner wall constraint)
+    lcfs = _extract_lcfs_curve_from_shape(shape)
+
+    # scalar targets
     R0_t = scal.get("geom_R0_mid", float("nan"))
     A_t  = scal.get("geom_A_mid",  float("nan"))
     k_t  = scal.get("geom_kappa_mid", float("nan"))
     du_t = scal.get("geom_delta_u", float("nan"))
     dl_t = scal.get("geom_delta_l", float("nan"))
 
-    # fallback
+    # fallback to cfg if CAD meta missing
     if not np.isfinite(R0_t):
         R0_t = _safe_float(getattr(cfg, "R0_geom", 4.0), 4.0)
     if not np.isfinite(A_t):
@@ -490,10 +506,9 @@ def _misfit_cad(geom: Dict[str, Any], shape: Dict[str, Any], diag: Dict[str, Any
 
     term_x *= (w_x ** 2)
 
-    # optional curve term (only if both are available)
+    # optional curve term (only if both available)
     term_shape = 0.0
     shape_rms: Optional[float] = None
-    lcfs = _extract_lcfs_curve_from_shape(shape)
     if (lcfs is not None) and (target_curve is not None) and (lcfs.shape[0] >= 10) and (target_curve.shape[0] >= 10):
         sr = _rms_chamfer_sym(lcfs, target_curve)
         if np.isfinite(sr):
@@ -507,10 +522,35 @@ def _misfit_cad(geom: Dict[str, Any], shape: Dict[str, Any], diag: Dict[str, Any
     if fallback_lcfs:
         misfit += penalty_fallback
 
-    # optional: negative triangularity penalty
+    # negative triangularity penalty
     pen_neg = float(getattr(cfg, "penalty_neg_delta", 10.0))
     if du < 0.0 or dl < 0.0:
         misfit += pen_neg * (abs(min(du, 0.0)) + abs(min(dl, 0.0)))
+
+    # ----------------------------
+    # NEW: inner wall constraint
+    # ----------------------------
+    frac_out_inner: Optional[float] = None
+    if enforce_inner and ("R_inner" in geom) and ("Z_inner" in geom):
+        wall_inner = _open_curve_from_closed(np.asarray(geom["R_inner"], float), np.asarray(geom["Z_inner"], float))
+        if lcfs is None or lcfs.shape[0] < 10 or wall_inner.shape[0] < 3:
+            # If you really want this enforced strictly, flip inner_hard_fail=True in config.
+            frac_out_inner = None
+        else:
+            frac = _frac_outside(lcfs, wall_inner, radius=inner_radius)
+            frac_out_inner = float(frac) if np.isfinite(frac) else None
+
+        if frac_out_inner is not None and frac_out_inner > float(inner_tol):
+            if inner_hard:
+                info = {
+                    "mode": "cad",
+                    "ok": False,
+                    "reason": "lcfs_outside_inner",
+                    "frac_out_inner": float(frac_out_inner),
+                    "inner_tol": float(inner_tol),
+                }
+                return float(pen_out_hard), info
+            misfit += float(pen_out) * float(frac_out_inner)
 
     info = {
         "mode": "cad",
@@ -527,6 +567,8 @@ def _misfit_cad(geom: Dict[str, Any], shape: Dict[str, Any], diag: Dict[str, Any
         "ok_sep": bool(ok_sep),
         "n_xpoints": int(len(xps)),
         "fallback_lcfs": bool(fallback_lcfs),
+        "frac_out_inner": frac_out_inner,
+        "inner_enforced": bool(enforce_inner and ("R_inner" in geom) and ("Z_inner" in geom)),
     }
     return float(misfit), info
 
@@ -583,7 +625,6 @@ def _worker_eval(
             except Exception:
                 diag = {"ok": False}
 
-        # separatrix requirement
         ok_sep = bool(shape.get("ok_sep", False))
         if require_sep and (not ok_sep):
             res = {
@@ -595,6 +636,7 @@ def _worker_eval(
                 "diag": diag,
                 "shape_ok_sep": ok_sep,
                 "objective": objective,
+                "obj": {"mode": str(objective), "ok": False, "reason": "require_sep_failed"},
             }
             conn.send(res)
             conn.close()
@@ -684,7 +726,6 @@ def eval_case(
         }
 
     # process exited
-    res: Dict[str, Any]
     if recv_conn.poll(0.05):
         try:
             res = recv_conn.recv()
@@ -776,7 +817,12 @@ def refine(
     if not best.get("ok_solve", False):
         print("[WARN] init solve failed; refine may just shrink steps. Check config/DXF/targets.")
 
-    improve_eps = float(getattr(__import__("config_star_bean"), "improve_eps", 0.0)) if _here().joinpath("config_star_bean.py").exists() else 0.0
+    # improve epsilon (tie-break)
+    try:
+        import config_star_bean as cfg
+        improve_eps = float(getattr(cfg, "improve_eps", 1e-9))
+    except Exception:
+        improve_eps = 1e-9
     if not np.isfinite(improve_eps) or improve_eps <= 0:
         improve_eps = 1e-9
 
@@ -800,7 +846,6 @@ def refine(
             print(f"[STOP] no active moves above min-step={min_step_MA} MA")
             break
 
-        # Evaluate all neighbors in parallel (bounded by iter_workers)
         results: List[Tuple[int, str, Dict[str, Any], float]] = []
 
         t_iter0 = time.time()
@@ -843,19 +888,18 @@ def refine(
                     el = float(res.get("elapsed_s", float("nan")))
                     extra = ""
                     obj = res.get("obj", {}) if isinstance(res.get("obj", {}), dict) else {}
-                    if isinstance(obj, dict) and obj.get("mode") == "cad" and obj.get("ok", False):
+                    if isinstance(obj, dict) and obj.get("mode") == "cad":
                         dxl = obj.get("dx_lower_m", None)
                         dxu = obj.get("dx_upper_m", None)
                         sh  = obj.get("shape_rms_m", None)
                         fb  = obj.get("fallback_lcfs", None)
-                        extra = f" | dxL={_fmt_num(dxl)} dxU={_fmt_num(dxu)} shapeRMS={_fmt_num(sh)} fb={fb}"
+                        out_in = obj.get("frac_out_inner", None)
+                        extra = f" | dxL={_fmt_num(dxl)} dxU={_fmt_num(dxu)} shapeRMS={_fmt_num(sh)} outIn={_fmt_num(out_in)} fb={fb}"
                     elif isinstance(obj, dict) and obj.get("mode") == "diag" and obj.get("ok", False):
                         extra = f" | R0={_fmt_num(obj.get('R0', None))} A={_fmt_num(obj.get('A', None))} k={_fmt_num(obj.get('kappa', None))}"
                     print(f"  - {tag:4s} ok={ok} misfit={m:.6g} t={el:5.1f}s{extra}")
 
         # Choose best candidate deterministically:
-        #  - minimal misfit
-        #  - tie-break by lowest order index
         results.sort(key=lambda t: (t[3], t[0]))
         idx0, tag0, res0, m0 = results[0]
 
@@ -869,7 +913,6 @@ def refine(
             print(f"\n[ITER {it}] improved ({tag0}) -> misfit={best_m:.6g} @ {to_MA(x)} MA | iter_time={t_iter:.1f}s")
             _append_jsonl(log_jsonl, {"event": "accept", "iter": it, "move": tag0, "x_A": x, "best_misfit": best_m})
         else:
-            # shrink steps
             for k in keys:
                 step_MA[k] *= float(shrink)
             print(f"\n[ITER {it}] no improvement -> shrink steps: {step_MA} | iter_time={t_iter:.1f}s")
