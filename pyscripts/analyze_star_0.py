@@ -1,17 +1,6 @@
 # analyze_star.py
-# Unified analysis: true-separatrix detection via X-point + near-separatrix closed contour,
-# and robust LCFS fallback.
-#
-# Key change vs old version:
-# - We DO NOT require a closed contour exactly at psi_sep = psi_xpoint.
-# - Instead:
-#     1) detect candidate X-point(s)
-#     2) classify whether psi_x lies between axis and edge (physically consistent separatrix)
-#     3) build a CLOSED contour slightly inside the separatrix (psi_eval)
-# - If that succeeds, we mark ok_sep=True and return R_sep/Z_sep = near-separatrix evaluation curve.
-#
-# This is much more robust for diverted equilibria, where the exact psi=psi_x contour is often
-# numerically singular/open/degenerate.
+# Unified analysis: separatrix/X-point when possible; otherwise LCFS-limiter (robust).
+# JSON-friendly output, Windows-safe (Agg only when needed).
 
 from __future__ import annotations
 
@@ -21,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 try:
-    import contourpy
+    import contourpy  # fast contouring, no pyplot needed
 except Exception:
     contourpy = None
 
@@ -40,7 +29,6 @@ def _as_float(x: Any, default: float = float("nan")) -> float:
     except Exception:
         return float(default)
 
-
 def _get_attr_or_call(obj: Any, name: str) -> Any:
     if not hasattr(obj, name):
         return None
@@ -52,15 +40,14 @@ def _get_attr_or_call(obj: Any, name: str) -> Any:
     except Exception:
         return None
 
-
 def _psi_from_eq(eq: Any) -> np.ndarray:
     psi = _get_attr_or_call(eq, "psi")
     if psi is None:
         psi = _get_attr_or_call(eq, "Psi")
     if psi is None:
         raise AttributeError("Could not obtain psi from eq (eq.psi / eq.Psi).")
-    return np.asarray(psi, dtype=float)
-
+    psi = np.asarray(psi, dtype=float)
+    return psi
 
 def _grids_from_eq(eq: Any) -> Tuple[np.ndarray, np.ndarray]:
     R = _get_attr_or_call(eq, "R")
@@ -69,17 +56,19 @@ def _grids_from_eq(eq: Any) -> Tuple[np.ndarray, np.ndarray]:
         raise AttributeError("Could not obtain grids from eq (eq.R / eq.Z).")
     return np.asarray(R, float), np.asarray(Z, float)
 
-
-def _infer_axes_and_orient(
-    Rm: np.ndarray, Zm: np.ndarray, psi: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _infer_axes_and_orient(Rm: np.ndarray, Zm: np.ndarray, psi: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Return (R1, Z1, psi_RZ) where:
       R1: (nR,) increasing
       Z1: (nZ,) increasing
       psi_RZ: (nR, nZ) consistent with R1,Z1
+
+    Handles both meshgrid conventions:
+      - indexing='ij' => Rm[:,0] ~ R axis, Zm[0,:] ~ Z axis
+      - indexing='xy' => Rm[0,:] ~ R axis, Zm[:,0] ~ Z axis
     """
     if Rm.ndim != 2 or Zm.ndim != 2:
+        # already 1D? (rare)
         R1 = np.asarray(Rm, float).ravel()
         Z1 = np.asarray(Zm, float).ravel()
         psi_RZ = np.asarray(psi, float)
@@ -87,6 +76,8 @@ def _infer_axes_and_orient(
             raise ValueError("Non-2D grids but psi shape mismatch.")
         return R1, Z1, psi_RZ
 
+    # Detect 'ij' vs 'xy' by checking which direction is constant
+    # ij: Rm columns are ~identical; Zm rows are ~identical
     is_ij = False
     try:
         if Rm.shape[1] > 1 and Zm.shape[0] > 1:
@@ -99,35 +90,39 @@ def _infer_axes_and_orient(
         Z1 = np.asarray(Zm[0, :], float)
         psi_RZ = np.asarray(psi, float)
         if psi_RZ.shape != (R1.size, Z1.size):
+            # maybe transposed
             if psi_RZ.shape == (Z1.size, R1.size):
                 psi_RZ = psi_RZ.T
             else:
-                raise ValueError(f"psi shape mismatch: {psi_RZ.shape} vs {(R1.size, Z1.size)}")
+                raise ValueError(f"psi shape mismatch: {psi_RZ.shape} vs {(R1.size,Z1.size)}")
     else:
+        # assume xy
         R1 = np.asarray(Rm[0, :], float)
         Z1 = np.asarray(Zm[:, 0], float)
         psi_xy = np.asarray(psi, float)
+        # want (nR,nZ): transpose xy layout (nZ,nR) -> (nR,nZ)
         if psi_xy.shape == (Z1.size, R1.size):
             psi_RZ = psi_xy.T
         elif psi_xy.shape == (R1.size, Z1.size):
             psi_RZ = psi_xy
         else:
-            raise ValueError(f"psi shape mismatch: {psi_xy.shape} vs {(Z1.size, R1.size)} or {(R1.size, Z1.size)}")
+            raise ValueError(f"psi shape mismatch: {psi_xy.shape} vs {(Z1.size,R1.size)} or {(R1.size,Z1.size)}")
 
+    # enforce increasing axes + flip psi accordingly
     if R1.size > 1 and R1[0] > R1[-1]:
         R1 = R1[::-1].copy()
         psi_RZ = psi_RZ[::-1, :].copy()
-
     if Z1.size > 1 and Z1[0] > Z1[-1]:
         Z1 = Z1[::-1].copy()
         psi_RZ = psi_RZ[:, ::-1].copy()
 
     return R1, Z1, psi_RZ
 
-
-def _bilinear_interp(
-    R1: np.ndarray, Z1: np.ndarray, F_RZ: np.ndarray, Rp: np.ndarray, Zp: np.ndarray
-) -> np.ndarray:
+def _bilinear_interp(R1: np.ndarray, Z1: np.ndarray, F_RZ: np.ndarray, Rp: np.ndarray, Zp: np.ndarray) -> np.ndarray:
+    """
+    Bilinear interpolation on rect grid.
+    F_RZ shape (nR,nZ).
+    """
     R1 = np.asarray(R1, float)
     Z1 = np.asarray(Z1, float)
     F = np.asarray(F_RZ, float)
@@ -146,10 +141,8 @@ def _bilinear_interp(
     i = np.clip(i, 0, nR - 2)
     j = np.clip(j, 0, nZ - 2)
 
-    R0 = R1[i]
-    R2 = R1[i + 1]
-    Z0 = Z1[j]
-    Z2 = Z1[j + 1]
+    R0 = R1[i]; R2 = R1[i + 1]
+    Z0 = Z1[j]; Z2 = Z1[j + 1]
 
     t = (Rp - R0) / (R2 - R0 + 1e-30)
     u = (Zp - Z0) / (Z2 - Z0 + 1e-30)
@@ -161,17 +154,14 @@ def _bilinear_interp(
 
     return (1 - t) * (1 - u) * f00 + t * (1 - u) * f10 + (1 - t) * u * f01 + t * u * f11
 
-
 def _polyline_length(xy: np.ndarray) -> float:
     d = np.diff(xy, axis=0)
     return float(np.sum(np.hypot(d[:, 0], d[:, 1])))
 
-
 def _polygon_area(xy: np.ndarray) -> float:
-    x = xy[:, 0]
-    y = xy[:, 1]
+    # expects closed polygon (last==first) but works ok if not perfectly closed
+    x = xy[:, 0]; y = xy[:, 1]
     return 0.5 * float(np.sum(x[:-1] * y[1:] - x[1:] * y[:-1]))
-
 
 def _contains_point(poly: np.ndarray, pt: Tuple[float, float]) -> bool:
     if Path is not None:
@@ -179,7 +169,7 @@ def _contains_point(poly: np.ndarray, pt: Tuple[float, float]) -> bool:
             return bool(Path(poly).contains_point(pt))
         except Exception:
             pass
-
+    # fallback ray casting
     x, y = pt
     n = poly.shape[0]
     inside = False
@@ -191,7 +181,6 @@ def _contains_point(poly: np.ndarray, pt: Tuple[float, float]) -> bool:
         x0, y0 = x1, y1
     return inside
 
-
 def _close_if_needed(seg: np.ndarray) -> np.ndarray:
     if seg.shape[0] < 3:
         return seg
@@ -200,54 +189,31 @@ def _close_if_needed(seg: np.ndarray) -> np.ndarray:
     return seg
 
 
-def _edge_psi_mean(psi_RZ: np.ndarray) -> float:
-    edge = np.r_[psi_RZ[0, :], psi_RZ[-1, :], psi_RZ[:, 0], psi_RZ[:, -1]]
-    return float(np.nanmean(edge))
-
-
-def _axis_is_min(psi_ax: float, psi_edge: float) -> bool:
-    return bool(psi_edge > psi_ax)
-
-
-def _psi_between_axis_and_edge(
-    psi_ax: float,
-    psi_x: float,
-    psi_edge: float,
-    frac_margin: float = 0.002,
-) -> bool:
-    """
-    Check whether psi_x lies strictly between axis and edge with a small margin.
-    """
-    lo = min(psi_ax, psi_edge)
-    hi = max(psi_ax, psi_edge)
-    span = hi - lo
-    if not np.isfinite(span) or span <= 1e-14:
-        return False
-    lo2 = lo + frac_margin * span
-    hi2 = hi - frac_margin * span
-    return bool(lo2 < psi_x < hi2)
-
-
 # -------------------------
 # Contours
 # -------------------------
 def _contour_segments(R1: np.ndarray, Z1: np.ndarray, psi_RZ: np.ndarray, level: float) -> List[np.ndarray]:
+    """
+    Returns list of segments (N,2) in (R,Z).
+    """
     lvl = float(level)
     if not np.isfinite(lvl):
         return []
 
-    z = np.asarray(psi_RZ, float).T  # contourpy wants (nZ,nR)
+    # contourpy expects z shape (len(y), len(x)) = (nZ,nR)
+    z = np.asarray(psi_RZ, float).T
 
     if contourpy is not None:
         cg = contourpy.contour_generator(x=R1, y=Z1, z=z, name="serial")
         segs = cg.lines(lvl)
-        out: List[np.ndarray] = []
+        out = []
         for s in segs:
             s = np.asarray(s, float)
             if s.ndim == 2 and s.shape[1] == 2 and s.shape[0] >= 20:
                 out.append(s)
         return out
 
+    # matplotlib fallback
     import matplotlib
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
@@ -256,7 +222,7 @@ def _contour_segments(R1: np.ndarray, Z1: np.ndarray, psi_RZ: np.ndarray, level:
     try:
         cs = ax.contour(R1, Z1, z, levels=[lvl])
         segs = cs.allsegs[0] if (cs is not None and cs.allsegs and cs.allsegs[0]) else []
-        out: List[np.ndarray] = []
+        out = []
         for s in segs:
             s = np.asarray(s, float)
             if s.ndim == 2 and s.shape[1] == 2 and s.shape[0] >= 20:
@@ -268,8 +234,8 @@ def _contour_segments(R1: np.ndarray, Z1: np.ndarray, psi_RZ: np.ndarray, level:
 
 def _pick_boundary(segs: List[np.ndarray], R_ax: float, Z_ax: float, close_tol: float) -> Optional[np.ndarray]:
     """
-    Pick the best closed-ish contour enclosing the axis.
-    Prefer larger enclosed area.
+    Pick the "best" closed-ish contour that encloses the axis.
+    Choose the one with largest area among valid candidates.
     """
     cand = []
     for s in segs:
@@ -291,48 +257,16 @@ def _pick_boundary(segs: List[np.ndarray], R_ax: float, Z_ax: float, close_tol: 
     return cand[0][1]
 
 
-def _curve_not_touching_domain_edge(
-    seg: np.ndarray,
-    R1: np.ndarray,
-    Z1: np.ndarray,
-    edge_pad_cells: int,
-) -> bool:
-    if seg is None or seg.shape[0] < 10:
-        return False
-
-    dR = float(np.min(np.diff(R1))) if R1.size > 1 else 0.0
-    dZ = float(np.min(np.diff(Z1))) if Z1.size > 1 else 0.0
-
-    Rmin_dom, Rmax_dom = float(R1[0]), float(R1[-1])
-    Zmin_dom, Zmax_dom = float(Z1[0]), float(Z1[-1])
-
-    padR = edge_pad_cells * dR
-    padZ = edge_pad_cells * dZ
-
-    Rs = seg[:, 0]
-    Zs = seg[:, 1]
-
-    if Rs.min() <= Rmin_dom + padR:
-        return False
-    if Rs.max() >= Rmax_dom - padR:
-        return False
-    if Zs.min() <= Zmin_dom + padZ:
-        return False
-    if Zs.max() >= Zmax_dom - padZ:
-        return False
-    return True
-
-
 # -------------------------
 # Axis + X-point detection
 # -------------------------
 def _magnetic_axis(eq: Any, R1: np.ndarray, Z1: np.ndarray, psi_RZ: np.ndarray) -> Tuple[float, float, float]:
+    # best: eq.magneticAxis()
     if hasattr(eq, "magneticAxis"):
         try:
             ax = eq.magneticAxis()
             if isinstance(ax, (tuple, list)) and len(ax) >= 2:
-                R_ax = float(ax[0])
-                Z_ax = float(ax[1])
+                R_ax = float(ax[0]); Z_ax = float(ax[1])
                 psi_ax = float(ax[2]) if len(ax) >= 3 else float("nan")
                 if not np.isfinite(psi_ax):
                     psi_ax = float(_bilinear_interp(R1, Z1, psi_RZ, np.array([R_ax]), np.array([Z_ax]))[0])
@@ -340,6 +274,7 @@ def _magnetic_axis(eq: Any, R1: np.ndarray, Z1: np.ndarray, psi_RZ: np.ndarray) 
         except Exception:
             pass
 
+    # fallback: pick extremum closer to center
     nR, nZ = psi_RZ.shape
     i0, j0 = nR // 2, nZ // 2
     imin = int(np.nanargmin(psi_RZ))
@@ -350,7 +285,6 @@ def _magnetic_axis(eq: Any, R1: np.ndarray, Z1: np.ndarray, psi_RZ: np.ndarray) 
     d2 = (i2 - i0) ** 2 + (j2 - j0) ** 2
     i, j = (i1, j1) if d1 <= d2 else (i2, j2)
     return float(R1[i]), float(Z1[j]), float(psi_RZ[i, j])
-
 
 def _find_xpoints_saddle(
     R1: np.ndarray,
@@ -365,14 +299,18 @@ def _find_xpoints_saddle(
     """
     Saddle heuristic on psi:
       - compute grad^2
-      - pick lowest-grad candidates
+      - pick lowest grad^2 candidates
       - keep those with Hessian det < 0
       - cluster by min distance
     """
     psi = np.asarray(psi_RZ, float)
+    nR, nZ = psi.shape
+
+    # gradients (axis0=R, axis1=Z)
     dpsi_dR, dpsi_dZ = np.gradient(psi, R1, Z1, edge_order=1)
     g2 = dpsi_dR**2 + dpsi_dZ**2
 
+    # ignore edges
     g2[:2, :] = np.inf
     g2[-2:, :] = np.inf
     g2[:, :2] = np.inf
@@ -396,35 +334,32 @@ def _find_xpoints_saddle(
         order = np.argsort(vals)[:int(cand_count)]
         cand_idx = cand_idx[order]
 
+    # Hessian (using gradients)
     d2psi_dRR, d2psi_dRZ = np.gradient(dpsi_dR, R1, Z1, edge_order=1)
     d2psi_dZR, d2psi_dZZ = np.gradient(dpsi_dZ, R1, Z1, edge_order=1)
 
-    pts: List[Tuple[float, float, float, float]] = []
+    pts: List[Tuple[float, float, float]] = []
     for (i, j) in cand_idx:
-        hxy = 0.5 * (d2psi_dRZ[i, j] + d2psi_dZR[i, j])
-        det = d2psi_dRR[i, j] * d2psi_dZZ[i, j] - hxy**2
+        det = d2psi_dRR[i, j] * d2psi_dZZ[i, j] - 0.25 * (d2psi_dRZ[i, j] + d2psi_dZR[i, j]) ** 2
         if not np.isfinite(det) or det >= 0:
             continue
         R = float(R1[int(i)])
         Z = float(Z1[int(j)])
         p = float(psi[i, j])
-        g = float(g2[i, j])
-        pts.append((R, Z, p, g))
+        pts.append((R, Z, p))
 
     if not pts:
         return []
 
-    pts.sort(key=lambda t: t[3])  # lower grad^2 first
-
     out: List[Dict[str, float]] = []
-    for R, Z, p, g in pts:
+    for R, Z, p in pts:
         keep = True
         for q in out:
             if math.hypot(R - q["R"], Z - q["Z"]) < float(min_sep_m):
                 keep = False
                 break
         if keep:
-            out.append({"R": float(R), "Z": float(Z), "psi": float(p), "grad2": float(g)})
+            out.append({"R": float(R), "Z": float(Z), "psi": float(p)})
         if len(out) >= int(max_points):
             break
     return out
@@ -437,45 +372,30 @@ def _metrics_from_boundary(R_sep: np.ndarray, Z_sep: np.ndarray) -> Dict[str, fl
     R = np.asarray(R_sep, float)
     Z = np.asarray(Z_sep, float)
 
-    Rmin = float(np.nanmin(R))
-    Rmax = float(np.nanmax(R))
-    Zmin = float(np.nanmin(Z))
-    Zmax = float(np.nanmax(Z))
+    Rmin = float(np.nanmin(R)); Rmax = float(np.nanmax(R))
+    Zmin = float(np.nanmin(Z)); Zmax = float(np.nanmax(Z))
 
     R0 = 0.5 * (Rmax + Rmin)
     a = 0.5 * (Rmax - Rmin)
     if not np.isfinite(a) or a <= 1e-6:
-        return dict(
-            R0_plasma=float("nan"),
-            a_plasma=float("nan"),
-            A_plasma=float("nan"),
-            kappa_plasma=float("nan"),
-            delta_u=float("nan"),
-            delta_l=float("nan"),
-        )
+        return dict(R0_plasma=float("nan"), a_plasma=float("nan"), A_plasma=float("nan"),
+                    kappa_plasma=float("nan"), delta_u=float("nan"), delta_l=float("nan"))
 
     A = R0 / a
+    # kappa = Zspan/(Rspan) == Zspan/(2a)
     kappa = (Zmax - Zmin) / (Rmax - Rmin + 1e-30)
 
-    iu = int(np.argmax(Z))
-    il = int(np.argmin(Z))
-    Ru = float(R[iu])
-    Rl = float(R[il])
+    iu = int(np.argmax(Z)); il = int(np.argmin(Z))
+    Ru = float(R[iu]); Rl = float(R[il])
     delta_u = (R0 - Ru) / a
     delta_l = (R0 - Rl) / a
 
-    return dict(
-        R0_plasma=float(R0),
-        a_plasma=float(a),
-        A_plasma=float(A),
-        kappa_plasma=float(kappa),
-        delta_u=float(delta_u),
-        delta_l=float(delta_l),
-    )
+    return dict(R0_plasma=float(R0), a_plasma=float(a), A_plasma=float(A),
+                kappa_plasma=float(kappa), delta_u=float(delta_u), delta_l=float(delta_l))
 
 
 # -------------------------
-# LCFS-limiter fallback
+# LCFS-limiter (robust level selection)
 # -------------------------
 def _lcfs_limiter(
     R1: np.ndarray,
@@ -488,19 +408,23 @@ def _lcfs_limiter(
     *,
     prefer_inner: bool = True,
     edge_pad_cells: int = 2,
-    psi_percentile: Optional[float] = 0.5,
+    psi_percentile: Optional[float] = 0.5,  # <=0 -> extreme
 ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Dict[str, Any], float]:
+    """
+    Returns (R_sep, Z_sep, info, psi_lcfs_used)
+    Chooses psi_lcfs by scanning candidate percentiles to ensure LCFS "touches" limiter (not too inside).
+    """
     info = {"ok": False, "source": "lcfs_limiter"}
 
     if prefer_inner and ("R_inner" in geom and "Z_inner" in geom):
         R_lim = np.asarray(geom["R_inner"], float)
         Z_lim = np.asarray(geom["Z_inner"], float)
-        touch_ref = float(np.nanmin(R_lim))
+        touch_ref = float(np.nanmin(R_lim))  # inner limiter ~ smallest R
         touch_mode = "Rmin"
     else:
         R_lim = np.asarray(geom["R_outer"], float)
         Z_lim = np.asarray(geom["Z_outer"], float)
-        touch_ref = float(np.nanmax(R_lim))
+        touch_ref = float(np.nanmax(R_lim))  # outer limiter ~ largest R
         touch_mode = "Rmax"
 
     psi_lim = _bilinear_interp(R1, Z1, psi_RZ, R_lim, Z_lim)
@@ -508,10 +432,13 @@ def _lcfs_limiter(
     if psi_lim.size < 10:
         return None, None, {"ok": False, "source": "lcfs_limiter", "why": "psi_lim_empty"}, float("nan")
 
-    psi_edge = _edge_psi_mean(psi_RZ)
-    axis_is_min = _axis_is_min(psi_ax, psi_edge)
+    # determine whether axis is min or max relative to edge
+    psi_edge = float(np.nanmean(np.r_[psi_RZ[0, :], psi_RZ[-1, :], psi_RZ[:, 0], psi_RZ[:, -1]]))
+    axis_is_min = bool(psi_edge > psi_ax)
 
-    cand_p: List[float]
+    # build candidate levels (percentile scan)
+    # If psi_percentile <= 0 => allow extreme (min/max) first.
+    cand_p = []
     if psi_percentile is None:
         cand_p = [0.0, 0.5, 1.0, 2.0, 5.0, 10.0]
     else:
@@ -519,11 +446,19 @@ def _lcfs_limiter(
         if p0 <= 0:
             cand_p = [0.0, 0.5, 1.0, 2.0, 5.0, 10.0]
         else:
-            cand_p = sorted(set([0.0, max(0.0, p0 / 2.0), p0, min(50.0, 2.0 * p0), 5.0, 10.0]))
+            # center scan around requested percentile
+            cand_p = sorted(set([0.0, max(0.0, p0 / 2), p0, min(50.0, 2 * p0), 5.0, 10.0]))
 
+    # closure tolerance based on grid
     dR = float(np.min(np.diff(R1))) if R1.size > 1 else 0.0
     dZ = float(np.min(np.diff(Z1))) if Z1.size > 1 else 0.0
     close_tol = 5.0 * max(dR, dZ, 1e-6)
+
+    # edge-pad sanity
+    Rmin_dom, Rmax_dom = float(R1[0]), float(R1[-1])
+    Zmin_dom, Zmax_dom = float(Z1[0]), float(Z1[-1])
+    padR = edge_pad_cells * dR
+    padZ = edge_pad_cells * dZ
 
     best = None  # (touch_err, seg, psi_lcfs)
     for p in cand_p:
@@ -538,10 +473,13 @@ def _lcfs_limiter(
         if seg is None:
             continue
 
-        if not _curve_not_touching_domain_edge(seg, R1, Z1, edge_pad_cells=edge_pad_cells):
+        R_sep = seg[:, 0]; Z_sep = seg[:, 1]
+
+        # reject if on domain edge
+        if (R_sep.min() <= Rmin_dom + padR) or (R_sep.max() >= Rmax_dom - padR) or (Z_sep.min() <= Zmin_dom + padZ) or (Z_sep.max() >= Zmax_dom - padZ):
             continue
 
-        R_sep = seg[:, 0]
+        # touch error heuristic (avoid “LCFS too inside”)
         if touch_mode == "Rmin":
             touch_err = abs(float(R_sep.min()) - touch_ref)
         else:
@@ -561,86 +499,6 @@ def _lcfs_limiter(
 
 
 # -------------------------
-# Near-separatrix evaluation contour
-# -------------------------
-def _near_separatrix_closed_curve(
-    R1: np.ndarray,
-    Z1: np.ndarray,
-    psi_RZ: np.ndarray,
-    R_ax: float,
-    Z_ax: float,
-    psi_ax: float,
-    psi_sep: float,
-    *,
-    edge_pad_cells: int = 2,
-    eps_fracs: Tuple[float, ...] = (1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2),
-) -> Tuple[Optional[np.ndarray], float, Dict[str, Any]]:
-    """
-    Build a CLOSED contour slightly inside the separatrix.
-    This is what we use for shape/strike/containment evaluation when a true X-point exists.
-    """
-    info: Dict[str, Any] = {
-        "ok": False,
-        "source": "near_separatrix",
-        "eps_fracs": list(eps_fracs),
-    }
-
-    if not np.isfinite(psi_sep) or not np.isfinite(psi_ax):
-        info["why"] = "bad_psi"
-        return None, float("nan"), info
-
-    span_ax = abs(float(psi_sep) - float(psi_ax))
-    if not np.isfinite(span_ax) or span_ax <= 1e-14:
-        info["why"] = "span_ax_too_small"
-        return None, float("nan"), info
-
-    psi_edge = _edge_psi_mean(psi_RZ)
-    axis_is_min = _axis_is_min(psi_ax, psi_edge)
-
-    dR = float(np.min(np.diff(R1))) if R1.size > 1 else 0.0
-    dZ = float(np.min(np.diff(Z1))) if Z1.size > 1 else 0.0
-    close_tol = 5.0 * max(dR, dZ, 1e-6)
-
-    candidates: List[Tuple[float, float, float, np.ndarray]] = []
-    for eps in eps_fracs:
-        eps = float(eps)
-        if axis_is_min:
-            psi_eval = float(psi_sep - eps * span_ax)
-            if not (psi_ax < psi_eval < psi_sep):
-                continue
-        else:
-            psi_eval = float(psi_sep + eps * span_ax)
-            if not (psi_sep < psi_eval < psi_ax):
-                continue
-
-        segs = _contour_segments(R1, Z1, psi_RZ, psi_eval)
-        seg = _pick_boundary(segs, R_ax, Z_ax, close_tol=close_tol)
-        if seg is None:
-            continue
-
-        if not _curve_not_touching_domain_edge(seg, R1, Z1, edge_pad_cells=edge_pad_cells):
-            continue
-
-        area = abs(_polygon_area(seg))
-        candidates.append((eps, -area, psi_eval, seg))
-
-    if not candidates:
-        info["why"] = "no_closed_inner_curve"
-        return None, float("nan"), info
-
-    # Prefer the contour closest to separatrix (smallest eps), then largest area
-    candidates.sort(key=lambda t: (t[0], t[1]))
-    eps_best, neg_area_best, psi_eval_best, seg_best = candidates[0]
-
-    info["ok"] = True
-    info["eps_best"] = float(eps_best)
-    info["area_m2"] = float(-neg_area_best)
-    info["psi_edge"] = float(psi_edge)
-    info["axis_is_min"] = bool(axis_is_min)
-    return np.asarray(seg_best, float), float(psi_eval_best), info
-
-
-# -------------------------
 # Public API
 # -------------------------
 def analyze_star(
@@ -650,18 +508,31 @@ def analyze_star(
     require_two_x: bool = False,
     null_prefer: str = "lower",   # "lower" | "upper" | "any"
     max_xpoints: int = 10,
+    # LCFS fallback controls
     prefer_inner_lcfs: bool = True,
-    psi_percentile_lcfs: Optional[float] = 0.5,
+    psi_percentile_lcfs: Optional[float] = 0.5,  # <=0 => extreme
     edge_pad_cells: int = 2,
 ) -> Dict[str, Any]:
+    """
+    Output keys (backward-compatible with your scan):
+      ok_sep, reason, xpoints, R_sep, Z_sep,
+      R0_plasma, A_plasma, kappa_plasma, delta_u, delta_l, a_plasma,
+      R_ax, Z_ax, psi_ax, psi_sep, fallback_lcfs
+
+    IMPORTANT FIX:
+      - ok_sep == True ONLY when a true separatrix contour at psi_sep is found.
+      - fallback LCFS (limiter-like) does NOT set ok_sep=True.
+      - We add:
+          has_true_separatrix (bool)
+          has_closed_lcfs     (bool)
+          psi_lcfs            (float, only in fallback mode)
+    """
     out: Dict[str, Any] = dict(
-        ok_sep=False,                 # True only if true X-point + near-separatrix closed curve found
+        ok_sep=False,                 # True ONLY for true separatrix
         has_true_separatrix=False,
         has_closed_lcfs=False,
-        has_xpoint=False,
         reason="init",
         xpoints=[],
-        xpoints_valid=[],
         R_sep=[],
         Z_sep=[],
         R0_plasma=float("nan"),
@@ -673,13 +544,9 @@ def analyze_star(
         R_ax=float("nan"),
         Z_ax=float("nan"),
         psi_ax=float("nan"),
-        psi_edge=float("nan"),
-        psi_sep=float("nan"),        # exact psi at chosen X-point
-        psi_eval=float("nan"),       # closed curve slightly inside separatrix
-        psi_lcfs=float("nan"),       # fallback only
-        preferred_xpoint=None,
+        psi_sep=float("nan"),
+        psi_lcfs=float("nan"),        # only meaningful in fallback mode
         fallback_lcfs=None,
-        separatrix_eval_info=None,
     )
 
     try:
@@ -693,14 +560,11 @@ def analyze_star(
 
         # Axis
         R_ax, Z_ax, psi_ax = _magnetic_axis(eq, R1, Z1, psi_RZ)
-        psi_edge = _edge_psi_mean(psi_RZ)
-
         out["R_ax"] = float(R_ax)
         out["Z_ax"] = float(Z_ax)
         out["psi_ax"] = float(psi_ax)
-        out["psi_edge"] = float(psi_edge)
 
-        # X-points
+        # X-point candidates (saddles)
         xps = _find_xpoints_saddle(
             R1, Z1, psi_RZ,
             max_points=int(max_xpoints),
@@ -709,53 +573,41 @@ def analyze_star(
             min_sep_m=0.18,
         )
         out["xpoints"] = xps
-        out["has_xpoint"] = bool(len(xps) > 0)
 
-        valid_xps = []
-        for xp in xps:
-            psi_x = float(xp["psi"])
-            if _psi_between_axis_and_edge(psi_ax, psi_x, psi_edge, frac_margin=0.002):
-                valid_xps.append(dict(xp))
-        out["xpoints_valid"] = valid_xps
-
-        if require_two_x and len(valid_xps) < 2:
+        if require_two_x and len(xps) < 2:
             out["reason"] = "require_two_x_not_met"
-            # no early return; fallback diagnostics still useful
+            # don't return early; still allow fallback LCFS diagnostics below
 
-        # Choose preferred X-point among VALID candidates
+        # Choose psi_sep from preferred X-point (if any)
         psi_sep = None
-        chosen_xp = None
-        if valid_xps:
+        if xps:
             pref = str(null_prefer).strip().lower()
             if pref == "upper":
-                chosen_xp = max(valid_xps, key=lambda d: float(d["Z"]))
+                xp = max(xps, key=lambda d: float(d["Z"]))
             elif pref == "any":
-                chosen_xp = valid_xps[0]
+                xp = xps[0]
             else:
-                chosen_xp = min(valid_xps, key=lambda d: float(d["Z"]))
-            psi_sep = float(chosen_xp["psi"])
+                xp = min(xps, key=lambda d: float(d["Z"]))
+            psi_sep = float(xp["psi"])
             out["psi_sep"] = float(psi_sep)
-            out["preferred_xpoint"] = dict(chosen_xp)
 
-        # ---- True separatrix logic:
-        # if we have a physically consistent X-point, try a CLOSED contour slightly inside psi_sep
+        # closure tolerance
+        dR = float(np.min(np.diff(R1))) if R1.size > 1 else 0.0
+        dZ = float(np.min(np.diff(Z1))) if Z1.size > 1 else 0.0
+        close_tol = 5.0 * max(dR, dZ, 1e-6)
+
+        # ---- TRUE separatrix attempt
         if psi_sep is not None and np.isfinite(psi_sep):
-            seg_eval, psi_eval, sep_info = _near_separatrix_closed_curve(
-                R1, Z1, psi_RZ,
-                R_ax, Z_ax, psi_ax, psi_sep,
-                edge_pad_cells=int(edge_pad_cells),
-            )
-            out["separatrix_eval_info"] = sep_info
-            out["psi_eval"] = float(psi_eval)
-
-            if seg_eval is not None and isinstance(sep_info, dict) and sep_info.get("ok", False):
-                R_sep = np.asarray(seg_eval[:, 0], float)
-                Z_sep = np.asarray(seg_eval[:, 1], float)
+            segs = _contour_segments(R1, Z1, psi_RZ, psi_sep)
+            seg = _pick_boundary(segs, R_ax, Z_ax, close_tol=close_tol)
+            if seg is not None:
+                R_sep = np.asarray(seg[:, 0], float)
+                Z_sep = np.asarray(seg[:, 1], float)
                 met = _metrics_from_boundary(R_sep, Z_sep)
-
                 out.update(met)
                 out["R_sep"] = [float(x) for x in R_sep.tolist()]
                 out["Z_sep"] = [float(x) for x in Z_sep.tolist()]
+
                 out["ok_sep"] = True
                 out["has_true_separatrix"] = True
                 out["has_closed_lcfs"] = True
@@ -763,11 +615,12 @@ def analyze_star(
                 out["fallback_lcfs"] = None
                 return out
 
-            out["reason"] = "separatrix_eval_contour_failed"
+            # separatrix contour failed -> go fallback
+            out["reason"] = "separatrix_contour_failed"
         else:
-            out["reason"] = "no_valid_xpoint_for_psi_sep"
+            out["reason"] = "no_xpoint_for_psi_sep"
 
-        # ---- Fallback LCFS (NOT true separatrix)
+        # ---- Fallback LCFS-limiter (NOT a true separatrix)
         Rf, Zf, info, psi_lcfs = _lcfs_limiter(
             R1, Z1, psi_RZ, R_ax, Z_ax, psi_ax, geom,
             prefer_inner=bool(prefer_inner_lcfs),
@@ -782,10 +635,14 @@ def analyze_star(
             out.update(met)
             out["R_sep"] = [float(x) for x in np.asarray(Rf, float).tolist()]
             out["Z_sep"] = [float(x) for x in np.asarray(Zf, float).tolist()]
+
+            # KEY FIX:
+            # This is a closed LCFS-like contour, but NOT a separatrix.
             out["ok_sep"] = False
             out["has_true_separatrix"] = False
             out["has_closed_lcfs"] = True
-            if out.get("reason") in ("init", "no_valid_xpoint_for_psi_sep"):
+            # preserve earlier reason if separatrix failed; otherwise mark fallback
+            if out.get("reason") in ("init", "no_xpoint_for_psi_sep"):
                 out["reason"] = "fallback_lcfs_ok"
             return out
 

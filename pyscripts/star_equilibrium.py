@@ -200,14 +200,26 @@ def apply_family_currents(tokamak: Any, totals_A: Dict[str, float], mode: str) -
     # fallback: only if labels match (legacy)
     for lab, coil in getattr(tokamak, "coils_dict", {}).items():
         UL = str(lab).upper()
-        if UL == "CS":
+
+        # CS: soporta variantes típicas
+        if UL in ("CS", "CS1M", "CS1"):
             coil.current = float(totals_A.get("CS", 0.0))
+
         elif UL in ("PF1U", "PF1L"):
             coil.current = float(totals_A.get("PF1", 0.0))
         elif UL in ("PF2U", "PF2L"):
             coil.current = float(totals_A.get("PF2", 0.0))
         elif UL in ("PF3U", "PF3L"):
             coil.current = float(totals_A.get("PF3", 0.0))
+
+        # NUEVO: PF4–PF6
+        elif UL in ("PF4U", "PF4L"):
+            coil.current = float(totals_A.get("PF4", 0.0))
+        elif UL in ("PF5U", "PF5L"):
+            coil.current = float(totals_A.get("PF5", 0.0))
+        elif UL in ("PF6U", "PF6L"):
+            coil.current = float(totals_A.get("PF6", 0.0))
+
         else:
             # keep other coils (blanket, etc.) at 0
             try:
@@ -266,7 +278,8 @@ def print_group_currents_sanity(tokamak: Any, totals_A: Dict[str, float], mode: 
         print("[SANITY] tokamak.coil_groups not present; cannot sum per-family segments.")
         return
 
-    for fam in ("CS", "PF1", "PF2", "PF3"):
+    # NUEVO: incluye PF4–PF6
+    for fam in ("CS", "PF1", "PF2", "PF3", "PF4", "PF5", "PF6"):
         target = float(totals_A.get(fam, 0.0))
         labs = _get_group_labels(tokamak, fam)
         if not labs:
@@ -691,8 +704,11 @@ def build_equilibrium(
     R_outer = np.asarray(geom["R_outer"], dtype=float)
     Z_outer = np.asarray(geom["Z_outer"], dtype=float)
     margin = float(getattr(cfg, "margin_RZ", 0.5))
-    Rmin, Rmax = float(R_outer.min() - margin), float(R_outer.max() + margin)
-    Zmin, Zmax = float(Z_outer.min() - margin), float(Z_outer.max() + margin)
+    Rmin_raw = float(R_outer.min() - margin)
+    Rmin = max(0.05, Rmin_raw)          # 5 cm de margen mínimo > 0
+    Rmax = float(R_outer.max() + margin)
+    Zmin = float(Z_outer.min() - margin)
+    Zmax = float(Z_outer.max() + margin)
 
     eq = equilibrium_update.Equilibrium(
         tokamak=tokamak,
@@ -733,12 +749,17 @@ def build_equilibrium(
     for j, f in enumerate(f_list, start=1):
         this_tol = tol_final if (j == len(f_list)) else tol_ramp
 
+        # NUEVO: incluye PF4–PF6 (mantiene PF1–PF3 como baseline desde cfg)
         totals_A = {
             "CS":  float(f) * float(getattr(cfg, "CS_current", 0.0)),
             "PF1": float(f) * float(getattr(cfg, "PF1_current", 0.0)),
             "PF2": float(f) * float(getattr(cfg, "PF2_current", 0.0)),
             "PF3": float(f) * float(getattr(cfg, "PF3_current", 0.0)),
+            "PF4": float(f) * float(getattr(cfg, "PF4_current", 0.0)),
+            "PF5": float(f) * float(getattr(cfg, "PF5_current", 0.0)),
+            "PF6": float(f) * float(getattr(cfg, "PF6_current", 0.0)),
         }
+
         apply_family_currents(tokamak, totals_A, mode=mode)
         if verbose:
             print_group_currents_sanity(tokamak, totals_A, mode, header="--- Coil currents sanity check ---")

@@ -15,36 +15,25 @@ Conventions:
     One rectangle polyline per coil on layers:
         COIL_CS, COIL_PF1U, COIL_PF1L, ...
     You may also use multiple CS segments as distinct layers:
-        COIL_CS1M, COIL_CS2U, COIL_CS2L, COIL_CS3U, ...
+        COIL_CS1M, COIL_CS2U, COIL_CS2L, ...
     These will be treated as separate coils but grouped under family "CS".
   Fallback (legacy, less robust):
     Rectangles on COILS + labels on COIL_LABELS
 
-Stability improvements:
-  - Sequential duplicate removal / closure enforcement
-  - CCW enforcement for walls
-  - Optional resampling policy: "auto" | "always" | "never"
-  - Canonical start point: outboard midplane (max R, then min |Z|)
-  - POLYLINE vertex API compatibility (list vs callable)
-  - Optional entity flattening via ezdxf.path (if available)
+Key features:
+- Robust wall import: CCW enforcement, canonical start, resampling.
+- "Smooth CAD" option: densify polyline segments by max segment length (meters).
+- AUTO plasma target: Miller-like boundary fit inside inner wall (preferred) or outer wall.
+- Geometric xpoints markers + strike rays (plot-only).
+- Blanket passive filaments: fill region between WALL_INNER and WALL_OUTER uniformly.
+- Coil family grouping + area weights.
+- Coil area metrics + recommended Imax by family: Imax ≈ J_eng * fill_factor * A_eff.
 
-AUTO plasma target + side-panel parameters:
-  - plasma_target_mode: "cad" | "auto"
-  - Auto Miller-like target with (R0,A,kappa,Z0) + triangularity scan + shrink
-  - Fits inside WALL_INNER if available (else inside WALL_OUTER)
-  - Adds geometric xpoints markers + strike rays (plot-only, not magnetic)
-  - Computes a full pack of geometric parameters from the boundary and prints/stores them
-
-BLANKET / passive filaments (NEW):
-  - Optional generation of many passive (I=0) rectangular "filament coils"
-    filling the region between WALL_INNER and WALL_OUTER uniformly.
-  - Controlled by blanket_* fields in CADImportOptions.
-  - Stored in geom["blanket_filaments"] as tuples:
-        (label, Rc, Zc, dR, dZ)
-
-NOTE:
-  - Plasma target parameters here are geometric (boundary) parameters,
-    NOT equilibrium (psi-based) diagnostics.
+Notes:
+- "Imax recommended" is an engineering *order-of-magnitude* bound based on cross-section
+  and an assumed engineering current density J_eng. It is NOT a hard physics limit.
+- For ITER-like SC coils, J_eng can be ~30–60 A/mm^2 depending on design choices
+  (stabilizer, coolant, insulation, winding pack fill, peak field margins, etc.).
 """
 
 from __future__ import annotations
@@ -85,20 +74,25 @@ class CADLayers:
     coils_layer: str = "COILS"                # Fallback: all rectangles here
     coil_labels_layer: str = "COIL_LABELS"    # Fallback: text labels here
 
+    # --- NEW: divertor windows / markers ---
+    xpt_lower_win: str = "XPT_LOWER_WIN"
+    xpt_upper_win: str = "XPT_UPPER_WIN"
+    strike_lower_win: str = "STRIKE_LOWER_WIN"
+    strike_upper_win: str = "STRIKE_UPPER_WIN"
 
 @dataclass(frozen=True)
 class CADImportOptions:
     # If unit_scale is None, infer from $INSUNITS. Example: mm -> 1e-3.
     unit_scale: Optional[float] = None
 
-    # Wall resampling policy: "auto" | "always" | "never"
+    # Wall resampling policy (arc-length): "auto" | "always" | "never"
     resample_walls: str = "auto"
 
-    # Target points used if resampling is active
-    n_wall: int = 801
-    n_inner: int = 801
-    n_plasma: int = 320
-    min_wall_pts: int = 200
+    # Target points used if arc-length resampling is active
+    n_wall: int = 1601
+    n_inner: int = 2001
+    n_plasma: int = 501
+    min_wall_pts: int = 400
 
     # Enforce CCW orientation for wall polylines (recommended)
     enforce_ccw: bool = True
@@ -106,20 +100,29 @@ class CADImportOptions:
     # Rotate start to outboard midplane for consistency (recommended)
     canonical_start: bool = True
 
-    # Flattening chord-length target (meters) for SPLINE/ARC/ELLIPSE fallback (if ezdxf.path available)
-    flatten_distance: float = 0.01
+    # -------------------------
+    # "Smooth CAD" densification (recommended for low-poly CAD)
+    # -------------------------
+    # Prefer ezdxf.path flattening even for polylines (if available).
+    prefer_path_flattening: bool = True
 
+    # Chord-length target (meters) used by ezdxf.path flattening for SPLINE/ARC/ELLIPSE
+    flatten_distance: float = 0.002
+
+    # Subdivide polyline edges so max segment length <= this value (meters)
+    # Applied after units scaling, before arc-length resampling.
+    max_seg_len_wall: float = 0.008
+    max_seg_len_plasma: float = 0.008
+
+    # -------------------------
     # Fallback label matching tolerance (legacy mode)
+    # -------------------------
     label_match_factor: float = 2.0  # radius ~ factor * max(dR,dZ)
 
     # -------------------------
     # AUTO plasma target
     # -------------------------
-    # "cad"  -> use PLASMA_TARGET if exists (else fallback to auto)
-    # "auto" -> always generate auto target
-    plasma_target_mode: str = "auto"
-
-    # Fit wall preference: if WALL_INNER exists, fit inside it
+    plasma_target_mode: str = "auto"  # "cad" | "auto"
     plasma_fit_to_inner_if_available: bool = True
 
     # Nominal target parameters
@@ -152,32 +155,30 @@ class CADImportOptions:
     # BLANKET / passive filaments (AUTO between inner & outer wall)
     # -------------------------
     blanket_enabled: bool = False
-
-    # number of desired filaments
     blanket_n_filaments: int = 0
-
-    # "stratified" (recommended), "grid", "random"
-    blanket_distribution: str = "stratified"
+    blanket_distribution: str = "stratified"   # "stratified" (recommended), "grid", "random"
     blanket_seed: int = 0
-
-    # extra margin away from walls (m) (added on top of filament size)
     blanket_wall_margin_m: float = 0.01
-
-    # filament rectangle size (half-extents in m)
     blanket_filament_dR: float = 0.004
     blanket_filament_dZ: float = 0.004
-
-    # Only for stratified (if <=0 => auto)
     blanket_bins_R: int = 0
     blanket_bins_Z: int = 0
-
-    # Only for grid
     blanket_pitch_mode: str = "auto"   # "auto" or "manual"
     blanket_pitch_R: float = 0.03
     blanket_pitch_Z: float = 0.03
-
     blanket_label_prefix: str = "BLK"
     blanket_containment_radius: float = -1e-9
+
+    # -------------------------
+    # Coil Imax recommendation (engineering)
+    # -------------------------
+    # Effective conductor area = fill_factor * geometric rectangle area.
+    # Imax ≈ Jeng * Aeff.
+    fill_factor: float = 0.75
+    Jeng_default_A_per_mm2: float = 40.0
+    family_mode: str = "min"  # "min" (conservative) or "sum"
+    # Optional per-family overrides, e.g. {"CS": 35.0, "PF6": 45.0}
+    family_J_override_A_per_mm2: Optional[Dict[str, float]] = None
 
 
 # -----------------------------
@@ -187,6 +188,63 @@ class CADImportOptions:
 def _normalize_label(s: str) -> str:
     return str(s).strip().upper()
 
+def _polyline_length_open(xy: np.ndarray) -> float:
+    P = np.asarray(xy, float)
+    if P.ndim != 2 or P.shape[0] < 2:
+        return 0.0
+    d = P[1:] - P[:-1]
+    return float(np.sum(np.sqrt(np.sum(d * d, axis=1))))
+
+def _is_closed_polyline(xy: np.ndarray, tol: float = 1e-9) -> bool:
+    P = np.asarray(xy, float)
+    if P.shape[0] < 3:
+        return False
+    return bool(np.linalg.norm(P[0] - P[-1]) <= tol)
+
+def _prep_marker_polyline(xy: np.ndarray, *, unit_scale: float, opts: CADImportOptions) -> Dict[str, Any]:
+    """
+    Scale + dedupe + optional densify (using max_seg_len_plasma).
+    Keeps closure if the input is closed.
+    Returns dict {xy, closed, length_m}.
+    """
+    P = np.asarray(xy, float) * float(unit_scale)
+    P = _dedupe_sequential(P)
+
+    closed = _is_closed_polyline(P)
+    if closed:
+        P = _ensure_closed(P)
+
+    # Densify a bit for stable distance computations
+    maxlen = float(getattr(opts, "max_seg_len_plasma", 0.0))
+    if np.isfinite(maxlen) and maxlen > 0:
+        if closed:
+            P = _subdivide_closed_polyline_by_maxseg(P, maxlen)
+        else:
+            P = _subdivide_open_polyline_by_maxseg(P, maxlen)
+
+    P = _dedupe_sequential(P)
+    if closed:
+        P = _ensure_closed(P)
+
+    L = _polyline_length_open(_drop_duplicate_endpoint(P))
+    return {"xy": P, "closed": bool(closed), "length_m": float(L)}
+
+def _pick_best_marker(candidates: List[np.ndarray], *, unit_scale: float, opts: CADImportOptions) -> Optional[Dict[str, Any]]:
+    """
+    Pick the 'best' (longest) marker polyline from candidates.
+    """
+    best = None
+    bestL = -1.0
+    for xy in candidates:
+        try:
+            pack = _prep_marker_polyline(xy, unit_scale=unit_scale, opts=opts)
+            L = float(pack.get("length_m", 0.0))
+            if L > bestL:
+                bestL = L
+                best = pack
+        except Exception:
+            continue
+    return best
 
 def _infer_unit_scale_from_insunits(insunits_code: int) -> float:
     # AutoCAD $INSUNITS: 0=unitless, 1=in, 2=ft, 4=mm, 5=cm, 6=m
@@ -313,12 +371,65 @@ def _coil_from_rect_poly(xy: np.ndarray) -> Tuple[float, float, float, float]:
     return Rc, Zc, dR, dZ
 
 
+def _subdivide_open_polyline_by_maxseg(poly_open: np.ndarray, max_len: float) -> np.ndarray:
+    """
+    Densify an OPEN polyline so that each segment length <= max_len.
+    Keeps endpoints, inserts linear points.
+    """
+    P = np.asarray(poly_open, float)
+    if len(P) < 2:
+        return P
+    Lmax = float(max_len)
+    if not np.isfinite(Lmax) or Lmax <= 0:
+        return P
+
+    out = [P[0].copy()]
+    for i in range(len(P) - 1):
+        A = P[i]
+        B = P[i + 1]
+        d = B - A
+        seg = float(np.linalg.norm(d))
+        if seg <= 1e-15:
+            continue
+        nsub = int(np.ceil(seg / Lmax))
+        nsub = max(1, nsub)
+        for k in range(1, nsub + 1):
+            t = k / nsub
+            out.append(A + t * d)
+    out = np.asarray(out, float)
+    out = _dedupe_sequential(out)
+    return out
+
+
+def _subdivide_closed_polyline_by_maxseg(xy_closed: np.ndarray, max_len: float) -> np.ndarray:
+    """
+    Densify CLOSED polyline using max segment length; returns CLOSED polyline.
+    """
+    Popen = _drop_duplicate_endpoint(xy_closed)
+    if len(Popen) < 2:
+        return _ensure_closed(Popen)
+    Pwrap = np.vstack([Popen, Popen[0]])
+    Psub_open = _subdivide_open_polyline_by_maxseg(Pwrap, max_len)
+    Psub_open = _drop_duplicate_endpoint(Psub_open)
+    return _ensure_closed(Psub_open)
+
+
 def _entity_to_xy(entity, opts: CADImportOptions) -> np.ndarray:
     """
-    Extract XY vertices from LWPOLYLINE / POLYLINE.
+    Extract XY vertices from LWPOLYLINE / POLYLINE / LINE.
     Fallback: flatten via ezdxf.path for SPLINE/ARC/ELLIPSE if available.
     """
     et = entity.dxftype()
+
+    # If requested, prefer path flattening even for polylines (handles bulges).
+    if bool(getattr(opts, "prefer_path_flattening", False)) and ezpath is not None:
+        try:
+            p = ezpath.make_path(entity)
+            pts = [(float(v.x), float(v.y)) for v in p.flattening(distance=float(opts.flatten_distance))]
+            if len(pts) >= 2:
+                return np.array(pts, dtype=float)
+        except Exception:
+            pass
 
     if et == "LWPOLYLINE":
         pts = [(p[0], p[1]) for p in entity.get_points("xy")]
@@ -336,6 +447,15 @@ def _entity_to_xy(entity, opts: CADImportOptions) -> np.ndarray:
         pts = [(float(v.dxf.location.x), float(v.dxf.location.y)) for v in verts]
         return np.array(pts, dtype=float)
 
+    # --- NEW: support LINE (common for windows) ---
+    if et == "LINE":
+        try:
+            x1, y1 = float(entity.dxf.start.x), float(entity.dxf.start.y)
+            x2, y2 = float(entity.dxf.end.x), float(entity.dxf.end.y)
+            return np.array([[x1, y1], [x2, y2]], dtype=float)
+        except Exception:
+            pass
+
     if ezpath is not None:
         try:
             p = ezpath.make_path(entity)
@@ -344,8 +464,7 @@ def _entity_to_xy(entity, opts: CADImportOptions) -> np.ndarray:
         except Exception:
             pass
 
-    raise ValueError(f"Unsupported entity type '{et}'. Use (LW)POLYLINE in DXF.")
-
+    raise ValueError(f"Unsupported entity type '{et}'. Use (LW)POLYLINE/LINE in DXF.")
 
 def _text_entities_from_layer(msp, layer: str) -> List[Tuple[str, float, float]]:
     out: List[Tuple[str, float, float]] = []
@@ -391,7 +510,7 @@ def _area_from_dR_dZ(dR: float, dZ: float) -> float:
 
 
 # -----------------------------
-# BLANKET filament generator (NEW)
+# BLANKET filament generator
 # -----------------------------
 
 def _blanket_region_mask(
@@ -435,10 +554,6 @@ def _generate_blanket_centers(
 ) -> np.ndarray:
     """
     Returns (n,2) centers (R,Z) approximately uniformly covering blanket region.
-    Distributions:
-      - stratified (recommended): cell-jitter sampling -> uniform coverage, low variance
-      - grid: regular lattice -> very uniform but can look patterned
-      - random: Monte Carlo -> OK, but for small N can cluster visually
     """
     outer_open = np.asarray(outer_open, float)
     inner_open = None if inner_open is None else np.asarray(inner_open, float)
@@ -487,10 +602,9 @@ def _generate_blanket_centers(
             dx *= 0.85
             dy *= 0.85
 
-        # fallback
         dist = "stratified"
 
-    # ---- STRATIFIED (RECOMMENDED)
+    # ---- STRATIFIED
     if dist == "stratified":
         if int(bins_R) <= 0 or int(bins_Z) <= 0:
             aspect = W / (H + 1e-30)
@@ -519,7 +633,6 @@ def _generate_blanket_centers(
                     if len(out) >= n:
                         return np.asarray(out, float)
 
-            # if not enough points, refine bins
             if len(out) < n and pass_id in (3, 7, 11):
                 nR = int(np.ceil(nR * 1.25))
                 nZ = int(np.ceil(nZ * 1.25))
@@ -589,7 +702,7 @@ def _build_blanket_filaments(
 
 
 # -----------------------------
-# Geometry pack for plasma target
+# Plasma geometry pack
 # -----------------------------
 
 def _poly_perimeter(xy_closed: np.ndarray) -> float:
@@ -601,9 +714,6 @@ def _poly_perimeter(xy_closed: np.ndarray) -> float:
 
 
 def _poly_centroid(xy_closed: np.ndarray) -> Tuple[float, float]:
-    """
-    Centroid of a simple polygon (area-weighted). If degenerate, returns mean of vertices.
-    """
     pts = _ensure_closed(np.asarray(xy_closed, float))
     if len(pts) < 4:
         c = np.mean(pts, axis=0) if len(pts) else np.array([np.nan, np.nan])
@@ -623,10 +733,6 @@ def _poly_centroid(xy_closed: np.ndarray) -> Tuple[float, float]:
 
 
 def _horizontal_intersections_R(poly_open: np.ndarray, Zc: float, tol: float = 1e-12) -> np.ndarray:
-    """
-    Intersections of polygon edges with horizontal line Z=Zc.
-    Returns sorted unique R intersections.
-    """
     P = np.asarray(poly_open, float)
     if len(P) < 3:
         return np.array([], float)
@@ -652,8 +758,6 @@ def _horizontal_intersections_R(poly_open: np.ndarray, Zc: float, tol: float = 1
         return np.array([], float)
 
     out = np.array(sorted(out), float)
-
-    # dedupe near-equal intersections (vertex hits)
     keep = [out[0]]
     for v in out[1:]:
         if abs(v - keep[-1]) > 1e-9:
@@ -667,9 +771,6 @@ def compute_plasma_geom_params(
     Z0_ref: Optional[float] = None,
     R0_ref: Optional[float] = None,
 ) -> Dict[str, float]:
-    """
-    Compute geometric (purely boundary-based) parameters of a plasma contour.
-    """
     pts = _drop_duplicate_endpoint(np.asarray(xy_closed, float))
     if len(pts) < 3:
         return {"valid": 0.0}
@@ -736,7 +837,7 @@ def compute_plasma_geom_params(
 
 
 # -----------------------------
-# AUTO plasma target (fit inside inner wall + xpoints markers)
+# AUTO plasma target
 # -----------------------------
 
 def _miller_boundary_ud(
@@ -750,10 +851,6 @@ def _miller_boundary_ud(
     n: int,
     scale: float,
 ) -> np.ndarray:
-    """
-    Miller-like boundary with separate upper/lower triangularity.
-    Strictly geometric target.
-    """
     R0 = float(R0); a = float(a); kappa = float(kappa)
     du = float(delta_u); dl = float(delta_l)
     Z0 = float(Z0); n = int(max(160, n)); s = float(scale)
@@ -821,10 +918,6 @@ def _find_interior_point_near_target(
     samples: int,
     seed: int,
 ) -> Tuple[float, float]:
-    """
-    If (R0,Z0) is not inside the fit wall, pick an interior point (random sampling)
-    closest to the target. Helps feasibility when CAD wall is shifted.
-    """
     wall_open = np.asarray(wall_open, float)
     wall_path = MplPath(wall_open, closed=True)
 
@@ -925,7 +1018,6 @@ def _auto_plasma_target_fit_inner(
             if s <= 1e-8:
                 continue
 
-            # Primary: maximize scale. Secondary: prefer larger delta, then symmetry.
             score = (s, 0.10 * (du + dl), -0.02 * abs(du - dl))
             if (best is None) or (score > best[0]):
                 best = (score, float(du), float(dl), float(s))
@@ -942,7 +1034,6 @@ def _auto_plasma_target_fit_inner(
         Z0=Z0_use, n=int(n), scale=s_final
     )
 
-    # Final safety (if numeric jitter)
     if not _fits_inside_wall_strict(xy, wall_open=wall_open, containment_radius=float(containment_radius)):
         xy = _miller_boundary_ud(
             R0=R0_use, a=a_nom, kappa=float(kappa_t),
@@ -975,7 +1066,6 @@ def _auto_plasma_target_fit_inner(
         if isinstance(v, (int, float, np.floating)):
             meta[f"geom_{k}"] = float(v)
 
-    # Errors vs targets (midplane-based)
     A_mid = meta.get("geom_A_mid", np.nan)
     k_mid = meta.get("geom_kappa_mid", np.nan)
     R0_mid = meta.get("geom_R0_mid", np.nan)
@@ -989,6 +1079,10 @@ def _auto_plasma_target_fit_inner(
 
     return xy, meta
 
+
+# -----------------------------
+# Xpoints + strike lines (geometric markers)
+# -----------------------------
 
 def _poly_segments(poly_open: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     P = np.asarray(poly_open, dtype=float)
@@ -1151,7 +1245,12 @@ def load_geom_from_dxf(
         outer_xy = _enforce_ccw(outer_xy)
     if opts.canonical_start:
         outer_xy = _rotate_to_outboard_midplane(outer_xy)
-    outer_xy = _maybe_resample(outer_xy, opts.n_wall, opts.resample_walls, opts.min_wall_pts)
+
+    # Smooth CAD densify
+    outer_xy = _subdivide_closed_polyline_by_maxseg(outer_xy, float(getattr(opts, "max_seg_len_wall", 0.0)))
+
+    # Arc-length resample
+    outer_xy = _maybe_resample(outer_xy, int(opts.n_wall), str(opts.resample_walls), int(opts.min_wall_pts))
 
     inner_xy = None
     inner_candidates = polylines_in_layer(layers.wall_inner)
@@ -1163,7 +1262,9 @@ def load_geom_from_dxf(
             inner_xy = _enforce_ccw(inner_xy)
         if opts.canonical_start:
             inner_xy = _rotate_to_outboard_midplane(inner_xy)
-        inner_xy = _maybe_resample(inner_xy, opts.n_inner, opts.resample_walls, opts.min_wall_pts)
+
+        inner_xy = _subdivide_closed_polyline_by_maxseg(inner_xy, float(getattr(opts, "max_seg_len_wall", 0.0)))
+        inner_xy = _maybe_resample(inner_xy, int(opts.n_inner), str(opts.resample_walls), int(opts.min_wall_pts))
 
     # ---- BLANKET filaments (AUTO between inner & outer)
     blanket_filaments = []
@@ -1181,11 +1282,12 @@ def load_geom_from_dxf(
             plasma_xy = _enforce_ccw(plasma_xy)
         if opts.canonical_start:
             plasma_xy = _rotate_to_outboard_midplane(plasma_xy)
-        plasma_xy = _maybe_resample(plasma_xy, opts.n_plasma, opts.resample_walls, opts.min_wall_pts)
+        plasma_xy = _subdivide_closed_polyline_by_maxseg(plasma_xy, float(getattr(opts, "max_seg_len_plasma", 0.0)))
+        plasma_xy = _maybe_resample(plasma_xy, int(opts.n_plasma), str(opts.resample_walls), int(opts.min_wall_pts))
 
     plasma_meta: Dict[str, float] = {}
-    xpoints_target = []
-    strike_lines_target = []
+    xpoints_target: List[Tuple[float, float, str]] = []
+    strike_lines_target: List[np.ndarray] = []
 
     mode_pt = str(getattr(opts, "plasma_target_mode", "cad")).strip().lower()
     want_auto = (mode_pt == "auto") or (plasma_xy is None and mode_pt == "cad")
@@ -1205,7 +1307,7 @@ def load_geom_from_dxf(
             A_t=float(getattr(opts, "plasma_A", 2.0)),
             kappa_t=float(getattr(opts, "plasma_kappa", 2.5)),
             Z0_t=float(getattr(opts, "plasma_Z0", 0.0)),
-            n=int(getattr(opts, "n_plasma", 320)),
+            n=int(getattr(opts, "n_plasma", 501)),
             delta_max=float(getattr(opts, "plasma_delta_max", 0.70)),
             delta_grid=int(getattr(opts, "plasma_delta_grid", 17)),
             symmetric=bool(getattr(opts, "plasma_delta_symmetric", True)),
@@ -1218,6 +1320,10 @@ def load_geom_from_dxf(
         )
         plasma_meta["fit_wall_is_inner"] = 1.0 if fit_to_inner else 0.0
 
+        # Optional smoothing of plasma target too (after generation)
+        plasma_xy = _subdivide_closed_polyline_by_maxseg(plasma_xy, float(getattr(opts, "max_seg_len_plasma", 0.0)))
+        plasma_xy = _maybe_resample(plasma_xy, int(getattr(opts, "n_plasma", 501)), str(getattr(opts, "resample_walls", "auto")), int(getattr(opts, "min_wall_pts", 400)))
+
         # xpoints + strike lines to OUTER wall for visualization
         xpoints_target, strike_lines_target = _compute_xpoints_and_strike_lines(
             plasma_xy,
@@ -1225,7 +1331,44 @@ def load_geom_from_dxf(
             fallback_len=float(getattr(opts, "strike_ray_fallback_len", 3.0)),
         )
 
-    # ---- Coils (UNCHANGED)
+        # ---- NEW: import divertor windows/markers from CAD (XPT/STRIKE)
+        markers: Dict[str, Any] = {}
+
+        # helper reusing the local polylines_in_layer()
+        def _load_marker(layer_name: str) -> Optional[Dict[str, Any]]:
+            cand = polylines_in_layer(layer_name)
+            if not cand:
+                return None
+            return _pick_best_marker(cand, unit_scale=unit_scale, opts=opts)
+
+        xptL = _load_marker(layers.xpt_lower_win)
+        xptU = _load_marker(layers.xpt_upper_win)
+        stL  = _load_marker(layers.strike_lower_win)
+        stU  = _load_marker(layers.strike_upper_win)
+
+        if xptL is not None:
+            markers["xpt_lower"] = xptL
+        if xptU is not None:
+            markers["xpt_upper"] = xptU
+        if stL is not None:
+            markers["strike_lower"] = stL
+        if stU is not None:
+            markers["strike_upper"] = stU
+
+        if markers:
+            geom_markers_meta = {
+                "found": sorted(list(markers.keys())),
+                "layers": {
+                    "xpt_lower": layers.xpt_lower_win,
+                    "xpt_upper": layers.xpt_upper_win,
+                    "strike_lower": layers.strike_lower_win,
+                    "strike_upper": layers.strike_upper_win,
+                }
+            }
+        else:
+            geom_markers_meta = {"found": [], "layers": {}}
+
+    # ---- Coils (active)
     coils: Dict[str, Tuple[float, float, float, float]] = {}
 
     coil_polys: List[Tuple[str, np.ndarray]] = []
@@ -1302,6 +1445,51 @@ def load_geom_from_dxf(
         w = areas / float(np.sum(areas)) if float(np.sum(areas)) > 0 else np.ones_like(areas) / len(areas)
         coil_group_weights[fam] = {lab: float(wi) for lab, wi in zip(labs, w)}
 
+    # ---- Coil family metrics + Imax recommendation
+    fill = float(getattr(opts, "fill_factor", 0.75))
+    Jdef = float(getattr(opts, "Jeng_default_A_per_mm2", 40.0))
+    fam_mode = str(getattr(opts, "family_mode", "min")).strip().lower()
+    J_over = getattr(opts, "family_J_override_A_per_mm2", None) or {}
+
+    coil_family_metrics: Dict[str, Dict[str, float]] = {}
+    Imax_recommended_MA: Dict[str, float] = {}
+
+    for fam, labs in coil_groups.items():
+        areas_m2 = []
+        for lab in labs:
+            _Rc, _Zc, dR, dZ = coils[lab]
+            areas_m2.append(_area_from_dR_dZ(dR, dZ))
+        areas_m2 = np.asarray(areas_m2, float)
+
+        A_min_m2 = float(np.min(areas_m2)) if len(areas_m2) else 0.0
+        A_sum_m2 = float(np.sum(areas_m2)) if len(areas_m2) else 0.0
+
+        Aeff_min_m2 = float(fill) * A_min_m2
+        Aeff_sum_m2 = float(fill) * A_sum_m2
+
+        # convert to mm^2
+        Aeff_min_mm2 = Aeff_min_m2 * 1.0e6
+        Aeff_sum_mm2 = Aeff_sum_m2 * 1.0e6
+
+        J = float(J_over.get(fam, Jdef))
+
+        Aeff_mm2 = Aeff_min_mm2 if fam_mode == "min" else Aeff_sum_mm2
+        Imax_A = J * Aeff_mm2
+        Imax_MA = Imax_A / 1.0e6
+
+        coil_family_metrics[fam] = {
+            "n_coils": float(len(labs)),
+            "A_min_m2": float(A_min_m2),
+            "A_sum_m2": float(A_sum_m2),
+            "fill_factor": float(fill),
+            "Aeff_min_mm2": float(Aeff_min_mm2),
+            "Aeff_sum_mm2": float(Aeff_sum_mm2),
+            "J_A_per_mm2": float(J),
+            "family_mode_min": 1.0 if fam_mode == "min" else 0.0,
+            "Imax_recommended_MA": float(Imax_MA),
+        }
+        Imax_recommended_MA[fam] = float(Imax_MA)
+
     # Assemble geom dict
     geom: Dict = {
         "R_outer": outer_xy[:, 0],
@@ -1311,7 +1499,38 @@ def load_geom_from_dxf(
         "coil_group_weights": coil_group_weights,
         "cad_path": str(dxf_path),
         "unit_scale": float(unit_scale),
+        "sampling_meta": dict(
+            prefer_path_flattening=bool(getattr(opts, "prefer_path_flattening", True)),
+            flatten_distance=float(getattr(opts, "flatten_distance", 0.002)),
+            max_seg_len_wall=float(getattr(opts, "max_seg_len_wall", 0.008)),
+            max_seg_len_plasma=float(getattr(opts, "max_seg_len_plasma", 0.008)),
+            resample_walls=str(getattr(opts, "resample_walls", "auto")),
+            n_wall=int(getattr(opts, "n_wall", 1601)),
+            n_inner=int(getattr(opts, "n_inner", 2001)),
+            n_plasma=int(getattr(opts, "n_plasma", 501)),
+        ),
+        "coil_family_metrics": dict(coil_family_metrics),
+        "Imax_recommended_MA": dict(Imax_recommended_MA),
+        "Imax_assumptions": dict(
+            fill_factor=float(fill),
+            Jeng_default_A_per_mm2=float(Jdef),
+            family_mode=str(fam_mode),
+        ),
     }
+
+    # Attach marker windows (if any)
+    if markers:
+        # Store as numpy arrays (consistent with rest of geom)
+        # Each entry: {"xy": np.ndarray, "closed": bool, "length_m": float}
+        geom["marker_windows"] = {}
+        for k, v in markers.items():
+            geom["marker_windows"][k] = {
+                "xy": np.asarray(v["xy"], float),
+                "closed": bool(v.get("closed", False)),
+                "length_m": float(v.get("length_m", 0.0)),
+            }
+        geom["marker_windows_meta"] = geom_markers_meta
+
     if inner_xy is not None:
         geom["R_inner"] = inner_xy[:, 0]
         geom["Z_inner"] = inner_xy[:, 1]
@@ -1497,9 +1716,6 @@ def apply_group_currents(tokamak, group_currents: Dict[str, float], *, mode: str
 # -----------------------------
 
 def _format_plasma_meta_text(meta: Dict[str, float]) -> str:
-    """
-    Create a compact, readable block with the most important geometric params + errors.
-    """
     def g(k, default=np.nan):
         return meta.get(k, default)
 
@@ -1555,10 +1771,6 @@ def _format_plasma_meta_text(meta: Dict[str, float]) -> str:
 
 
 def plot_cad_geometry(geom: Dict, show: bool = True, ax=None):
-    """
-    If ax is None, creates a 2-panel figure (plot + right-side text box).
-    If ax is provided, plots on it and writes the box outside the axes on the right.
-    """
     meta = geom.get("plasma_auto_meta", None)
 
     if ax is None:
@@ -1599,12 +1811,12 @@ def plot_cad_geometry(geom: Dict, show: bool = True, ax=None):
 
     # blanket filaments
     if "blanket_filaments" in geom:
-        for (lab, Rc, Zc, dR, dZ) in geom["blanket_filaments"]:
+        for (_lab, Rc, Zc, dR, dZ) in geom["blanket_filaments"]:
             x0, x1 = Rc - dR, Rc + dR
             y0, y1 = Zc - dZ, Zc + dZ
             ax.plot([x0, x1, x1, x0, x0], [y0, y0, y1, y1, y0], lw=0.2)
 
-    # xpoints + strike lines (if present)
+    # xpoints + strike lines
     if "xpoints_target" in geom:
         for (Rx, Zx, kind) in geom["xpoints_target"]:
             ax.plot([Rx], [Zx], marker="x", ms=10, mew=2, linestyle="None")
@@ -1622,6 +1834,18 @@ def plot_cad_geometry(geom: Dict, show: bool = True, ax=None):
         ax.plot([x0, x1, x1, x0, x0], [y0, y0, y1, y1, y0], "k-", lw=1)
         ax.text(Rc, Zc, _normalize_label(name), ha="center", va="center", fontsize=8)
 
+    # --- NEW: marker windows visualization ---
+    if "marker_windows" in geom and isinstance(geom["marker_windows"], dict):
+        for name, pack in geom["marker_windows"].items():
+            try:
+                xy = np.asarray(pack.get("xy", None), float)
+                if xy.ndim == 2 and xy.shape[0] >= 2:
+                    ax.plot(xy[:, 0], xy[:, 1], lw=3.0, alpha=0.8, label=f"WIN:{name}")
+                    # small label near first point
+                    ax.text(float(xy[0, 0]), float(xy[0, 1]), f" {name}", fontsize=9, va="center")
+            except Exception:
+                pass
+
     ax.set_aspect("equal")
     ax.set_xlabel("R [m]")
     ax.set_ylabel("Z [m]")
@@ -1629,27 +1853,36 @@ def plot_cad_geometry(geom: Dict, show: bool = True, ax=None):
     ax.legend(loc="upper left")
 
     if show:
+        # tight_layout can warn with side text axes; it's safe. If you want, replace with subplots_adjust.
         plt.tight_layout()
         plt.show()
     return ax
 
 
 # -----------------------------
-# Main
+# Main (smoke test)
 # -----------------------------
 
 if __name__ == "__main__":
-    # Smoke test: AUTO plasma target + BLANKET filaments
     opts = CADImportOptions(
         unit_scale=None,
-        resample_walls="auto",
-        n_wall=801,
-        n_inner=801,
-        n_plasma=320,
-        min_wall_pts=200,
+
+        # Smooth CAD + sampling
+        prefer_path_flattening=True,
+        flatten_distance=0.002,
+        max_seg_len_wall=0.008,
+        max_seg_len_plasma=0.008,
+
+        resample_walls="always",
+        n_wall=1601,
+        n_inner=2001,
+        n_plasma=501,
+        min_wall_pts=400,
+
         enforce_ccw=True,
         canonical_start=True,
 
+        # Plasma target AUTO
         plasma_target_mode="auto",
         plasma_fit_to_inner_if_available=True,
         plasma_R0=4.0,
@@ -1667,6 +1900,7 @@ if __name__ == "__main__":
         center_search_seed=0,
         strike_ray_fallback_len=3.0,
 
+        # Blanket passive filaments
         blanket_enabled=True,
         blanket_n_filaments=2500,
         blanket_distribution="stratified",
@@ -1674,13 +1908,24 @@ if __name__ == "__main__":
         blanket_wall_margin_m=0.01,
         blanket_filament_dR=0.004,
         blanket_filament_dZ=0.004,
+
+        # Imax engineering
+        fill_factor=0.75,
+        Jeng_default_A_per_mm2=40.0,
+        family_mode="min",
+        family_J_override_A_per_mm2=None,
     )
 
     tokamak, geom = make_star_machine_from_cad(opts=opts, strict_expected=True)
     print("[OK] Loaded CAD machine from:", geom.get("cad_path"))
+
+    if "sampling_meta" in geom:
+        sm = geom["sampling_meta"]
+        print(f"[INFO] outer points: {len(geom['R_outer'])} inner: {len(geom.get('R_inner', []))}")
+        print("[INFO] sampling meta:", sm)
+
     print("[INFO] Coils found:", sorted(list(geom["coils"].keys())))
     print("[INFO] Families:", {k: len(v) for k, v in (geom.get("coil_groups", {}) or {}).items()})
-    print("[INFO] outer wall points:", len(geom["R_outer"]), "| inner wall points:", len(geom.get("R_inner", [])))
 
     if "blanket_meta" in geom:
         print("[INFO] blanket_meta:", geom["blanket_meta"])
@@ -1705,5 +1950,17 @@ if __name__ == "__main__":
     if "xpoints_target" in geom:
         print("[INFO] xpoints_target:", geom["xpoints_target"])
 
-    plot_cad_geometry(geom, show=True)
+    # Imax summary
+    if "Imax_recommended_MA" in geom:
+        ass = geom.get("Imax_assumptions", {})
+        print("\n[INFO] Imax recommended by family (Jeng * Aeff):")
+        print(f"  assumptions: fill_factor={ass.get('fill_factor')}, Jeng_default={ass.get('Jeng_default_A_per_mm2')} A/mm^2, family_mode={ass.get('family_mode')}")
+        fams = sorted(list(geom["Imax_recommended_MA"].keys()))
+        for fam in fams:
+            Imax = geom["Imax_recommended_MA"][fam]
+            met = (geom.get("coil_family_metrics", {}) or {}).get(fam, {})
+            Aeff_min = met.get("Aeff_min_mm2", np.nan)
+            J = met.get("J_A_per_mm2", np.nan)
+            print(f"  {fam:>4s}: Imax~{Imax:7.3f} MA  |  Aeff_min={Aeff_min:,.0f} mm^2  |  J={J:.1f} A/mm^2")
 
+    plot_cad_geometry(geom, show=True)

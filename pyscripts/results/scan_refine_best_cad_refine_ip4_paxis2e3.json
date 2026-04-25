@@ -1,0 +1,127 @@
+{
+  "objective": "cad",
+  "null_mode": "double",
+  "scan_keys": [
+    "CS",
+    "PF1",
+    "PF2",
+    "PF3",
+    "PF4",
+    "PF5",
+    "PF6"
+  ],
+  "fixed_keys": [
+    "null"
+  ],
+  "best_currents_MA": {
+    "null": 0.0,
+    "CS": -20.0,
+    "PF1": -10.512417839899966,
+    "PF2": 1.622127369478877,
+    "PF3": 4.727175728636371,
+    "PF4": 3.1975154813371884,
+    "PF5": 0.7470283883312202,
+    "PF6": -1.3216364002416703
+  },
+  "best_currents_A": {
+    "null": 0.0,
+    "CS": -20000000.0,
+    "PF1": -10512417.839899966,
+    "PF2": 1622127.369478877,
+    "PF3": 4727175.728636371,
+    "PF4": 3197515.4813371883,
+    "PF5": 747028.3883312203,
+    "PF6": -1321636.4002416702
+  },
+  "best_misfit": 64.79502498899312,
+  "best_result": {
+    "ok": true,
+    "ok_solve": true,
+    "misfit": 64.79502498899312,
+    "currents_A": {
+      "null": 0.0,
+      "CS": -20000000.0,
+      "PF1": -10512417.839899966,
+      "PF2": 1622127.369478877,
+      "PF3": 4727175.728636371,
+      "PF4": 3197515.4813371883,
+      "PF5": 747028.3883312203,
+      "PF6": -1321636.4002416702
+    },
+    "diag": {
+      "ok": true,
+      "R0": 1.4828247770714862,
+      "Z0": 7.088774012231625e-14,
+      "a": 0.5326381401874904,
+      "A": 2.7839252678178976,
+      "kappa": 1.6643467367336224,
+      "delta_u": 0.7955224804706862,
+      "delta_l": 0.7955224804706862,
+      "area_m2": 1.3043111214518999,
+      "Rmin": 0.9501866368839956,
+      "Rmax": 2.0154629172589766,
+      "Zmin": -0.8864945504808446,
+      "Zmax": 0.8864945504809864,
+      "method": "analyze_star_separatrix",
+      "R_ax": 1.7547588509316092,
+      "Z_ax": 0.0
+    },
+    "shape_ok_sep": true,
+    "objective": "cad",
+    "require_sep_failed": false,
+    "require_reason": null,
+    "obj": {
+      "mode": "cad",
+      "ok": true,
+      "null_mode": "double",
+      "has_true_separatrix": true,
+      "ok_sep": true,
+      "n_xpoints": 6,
+      "dx_lower_m": 3.466436369763583,
+      "dx_upper_m": 3.466436369763583,
+      "ds_lower_m": 4.61707899670013,
+      "ds_upper_m": 4.617078996700107,
+      "lower_xpoint": [
+        0.8272125998177845,
+        -1.577627579376859
+      ],
+      "upper_xpoint": [
+        0.8272125998177845,
+        1.5776275793768582
+      ],
+      "lower_strike": [
+        1.7054636088930446,
+        -0.5046527520991704
+      ],
+      "upper_strike": [
+        1.7054636088930448,
+        0.5046527520991945
+      ],
+      "shape_rms_m": 2.454962490852909,
+      "term_scalar": 120.97895235690109,
+      "term_x": 600.8090552809863,
+      "term_strike": 1065.8709230884683,
+      "term_shape": 2410.7363325978877,
+      "fallback_lcfs": false,
+      "frac_out_inner": null,
+      "inner_enforced": false,
+      "used_windows": {
+        "xpt_lower": true,
+        "xpt_upper": true,
+        "strike_lower": true,
+        "strike_upper": true
+      }
+    },
+    "elapsed_s": 74.23318266868591
+  },
+  "final_steps_MA": {
+    "CS": 0.015625,
+    "PF1": 0.0078125,
+    "PF2": 0.009375,
+    "PF3": 0.00625,
+    "PF4": 0.009375,
+    "PF5": 0.009375,
+    "PF6": 0.0125
+  },
+  "log_jsonl": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\scan_refine_cad_refine_ip4_paxis2e3.jsonl"
+}

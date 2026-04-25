@@ -1,20 +1,34 @@
-# scan_star_refine.py
 """
+scan_star_refine.py
+
 Deterministic + adaptive local refinement of STAR coil FAMILY currents
----------------------------------------------------------------------
+using a pattern-search / coordinate-descent scheme with step-size shrink.
 
-This is the hardened refine that matches the stochastic objective exactly:
-- CAD objective: plasma_target + xpoints_target from CAD
-- Supports null-mode: lower / upper / double
-- Hard timeout per case
-- Optional separatrix requirement: --require-sep
-- Optional inner-wall LCFS constraint (soft/hard): --enforce-inner / --inner-hard
+Key features:
+- Per-iteration parallel evaluation of neighbors (deterministic accept after all complete).
+- Robust subprocess eval with hard timeout per case.
+- Objectives:
+    * "cad": matches equilibrium plasma to CAD plasma_target + xpoints_target
+    * "diag": matches scalar targets from config_star_bean.py
 
-IMPORTANT: this refine varies ONLY scan keys; fixed keys are held constant.
-Use --scan-keys PF2,PF3,PF4,PF5,PF6 if you want more DOF than PF4-6.
+NEW (important):
+- LCFS-inside-inner-wall constraint (if WALL_INNER exists in geom):
+    * Computes frac_out_inner = fraction of LCFS points outside the inner wall polygon
+    * If enforce_inner_wall=True:
+        - soft: misfit += penalty_outside_inner * frac_out_inner
+        - hard: returns penalty_outside_inner_hard if frac_out_inner > tol
+    * Logs frac_out_inner inside obj dict, and prints it in verbose-evals.
 
-Usage example:
-  py .\scan_star_refine.py --init .\results\scan_multigoal_best.txt --objective cad --null-mode double --timeout 360 --max-iters 400 --iter-workers 2 --verbose-evals --scan-keys PF2,PF3,PF4,PF5,PF6 --fixed-keys CS,PF1
+UPDATED (PF4-6 refine):
+- Default scan keys: PF4, PF5, PF6
+- Default fixed keys: CS, PF1, PF2, PF3
+- The refine varies ONLY scan keys; fixed keys are always passed through unchanged.
+- Currents from JSON are read as MA and converted to A internally.
+- Currents written to config snippet at end are in e6 (A).
+
+IMPORTANT FIXES (this version):
+- JSON-safe writes for json/jsonl (numpy types inside diag/shape no longer crash logging).
+- Close send_conn in parent after spawning worker (stability in Windows spawn + Pipe usage).
 """
 
 from __future__ import annotations
@@ -42,22 +56,26 @@ DEFAULT_FIXED_KEYS: Tuple[str, ...] = ("CS", "PF1", "PF2", "PF3")
 def _to_builtin(obj: Any) -> Any:
     if obj is None:
         return None
-    if isinstance(obj, (np.integer,)):
+
+    if isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
         return int(obj)
-    if isinstance(obj, (np.floating,)):
+    if isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
         return float(obj)
     if isinstance(obj, (np.bool_,)):
         return bool(obj)
     if isinstance(obj, np.ndarray):
         return obj.tolist()
+
     if isinstance(obj, Path):
         return str(obj)
+
     if isinstance(obj, dict):
         return {str(k): _to_builtin(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_to_builtin(x) for x in obj]
     if isinstance(obj, (set, frozenset)):
         return [_to_builtin(x) for x in obj]
+
     return obj
 
 
@@ -121,6 +139,54 @@ def _fmt_num(x: Any) -> str:
         return "n/a"
 
 
+def _boolish(x: Any) -> Optional[bool]:
+    if x is None:
+        return None
+    if isinstance(x, bool):
+        return x
+    if isinstance(x, (int, np.integer)):
+        return bool(int(x))
+    if isinstance(x, (float, np.floating)):
+        if not np.isfinite(float(x)):
+            return None
+        return bool(int(x))
+    if isinstance(x, str):
+        s = x.strip().lower()
+        if s in ("1", "true", "t", "yes", "y", "on"):
+            return True
+        if s in ("0", "false", "f", "no", "n", "off"):
+            return False
+        return None
+    return None
+
+
+def _extract_fallback_lcfs_flag(shape: Dict[str, Any], diag: Dict[str, Any]) -> bool:
+    cand = None
+    if isinstance(shape, dict):
+        cand = shape.get("fallback_lcfs", None)
+
+    if cand is None and isinstance(diag, dict):
+        cand = diag.get("fallback_lcfs", None)
+
+    b = _boolish(cand)
+    if b is not None:
+        return bool(b)
+
+    if isinstance(cand, dict):
+        for kk in ("fallback", "is_fallback", "used_limiter", "limiter", "is_limiter"):
+            bb = _boolish(cand.get(kk, None))
+            if bb is not None:
+                return bool(bb)
+
+        reason = cand.get("reason", None)
+        if isinstance(reason, str):
+            r = reason.lower()
+            if ("fallback" in r) or ("limiter" in r):
+                return True
+
+    return False
+
+
 # ----------------------------
 # Geometry / curve metrics
 # ----------------------------
@@ -151,7 +217,7 @@ def _rms_chamfer_sym(P: np.ndarray, Q: np.ndarray) -> float:
     return float(math.sqrt(0.5 * (float(np.mean(d2_pq)) + float(np.mean(d2_qp)))))
 
 
-def _extract_lcfs_curve_from_shape(shape: Dict[str, Any], diag: Dict[str, Any]) -> Optional[np.ndarray]:
+def _extract_lcfs_curve_from_shape(shape: Dict[str, Any]) -> Optional[np.ndarray]:
     key_pairs = [
         ("R_sep", "Z_sep"),
         ("R_separatrix", "Z_separatrix"),
@@ -162,24 +228,17 @@ def _extract_lcfs_curve_from_shape(shape: Dict[str, Any], diag: Dict[str, Any]) 
     for rkey, zkey in key_pairs:
         if rkey in shape and zkey in shape:
             P = _open_curve_from_closed(np.asarray(shape[rkey], float), np.asarray(shape[zkey], float))
-            if P.shape[0] >= 20:
+            if P.shape[0] >= 10:
                 return P
 
-    # fallback from plasma_diag (our star_equilibrium uses this)
-    if isinstance(diag, dict):
-        Rf = diag.get("R_lcfs", None)
-        Zf = diag.get("Z_lcfs", None)
-        if Rf is not None and Zf is not None:
-            P = _open_curve_from_closed(np.asarray(Rf, float), np.asarray(Zf, float))
-            if P.shape[0] >= 20:
-                return P
-
-    fb = shape.get("fallback_lcfs", None)
-    if isinstance(fb, dict) and ("R" in fb) and ("Z" in fb):
-        P = _open_curve_from_closed(np.asarray(fb["R"], float), np.asarray(fb["Z"], float))
-        if P.shape[0] >= 20:
-            return P
-
+    for k in ("lcfs", "separatrix", "sep"):
+        v = shape.get(k, None)
+        if isinstance(v, dict):
+            for rkey, zkey in key_pairs:
+                if rkey in v and zkey in v:
+                    P = _open_curve_from_closed(np.asarray(v[rkey], float), np.asarray(v[zkey], float))
+                    if P.shape[0] >= 10:
+                        return P
     return None
 
 
@@ -213,19 +272,21 @@ def _extract_xpoints(shape: Dict[str, Any], diag: Dict[str, Any]) -> List[Tuple[
                 elif isinstance(item, dict) and "R" in item and "Z" in item:
                     out.append((float(item["R"]), float(item["Z"])))
 
-    if not out and isinstance(diag, dict):
-        candidates = [
-            ("Rx_lower", "Zx_lower"),
-            ("Rx_upper", "Zx_upper"),
-            ("R_x_lower", "Z_x_lower"),
-            ("R_x_upper", "Z_x_upper"),
-        ]
-        for rk, zk in candidates:
-            if rk in diag and zk in diag:
-                try:
-                    out.append((float(diag[rk]), float(diag[zk])))
-                except Exception:
-                    pass
+    if out:
+        return out
+
+    candidates = [
+        ("Rx_lower", "Zx_lower"),
+        ("Rx_upper", "Zx_upper"),
+        ("R_x_lower", "Z_x_lower"),
+        ("R_x_upper", "Z_x_upper"),
+    ]
+    for rk, zk in candidates:
+        if rk in diag and zk in diag:
+            try:
+                out.append((float(diag[rk]), float(diag[zk])))
+            except Exception:
+                pass
 
     return out
 
@@ -281,168 +342,7 @@ def _frac_outside(points: np.ndarray, wall_open: np.ndarray, radius: float = -1e
     path = MplPath(W, closed=True)
     inside = path.contains_points(P, radius=float(radius))
     return float(1.0 - np.mean(inside))
-def _point_to_segment_distance(p: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
-    p = np.asarray(p, float)
-    a = np.asarray(a, float)
-    b = np.asarray(b, float)
-    ab = b - a
-    den = float(np.dot(ab, ab))
-    if den <= 1e-30:
-        return float(np.linalg.norm(p - a))
-    t = float(np.dot(p - a, ab) / den)
-    t = max(0.0, min(1.0, t))
-    q = a + t * ab
-    return float(np.linalg.norm(p - q))
 
-
-def _point_to_polyline_distance(point: Tuple[float, float], poly: np.ndarray, closed: bool = False) -> float:
-    P = np.asarray(poly, float)
-    if P.ndim != 2 or P.shape[0] < 2:
-        return float("inf")
-
-    p = np.asarray(point, float)
-
-    # If closed polygon and point is inside -> distance 0
-    if bool(closed) and P.shape[0] >= 3:
-        try:
-            path = MplPath(P, closed=True)
-            if path.contains_point((float(p[0]), float(p[1]))):
-                return 0.0
-        except Exception:
-            pass
-
-    dmin = float("inf")
-    n = P.shape[0]
-    m = n if closed else (n - 1)
-    for i in range(m):
-        a = P[i]
-        b = P[(i + 1) % n]
-        d = _point_to_segment_distance(p, a, b)
-        if d < dmin:
-            dmin = d
-    return float(dmin)
-
-
-def _extract_marker_window(geom: Dict[str, Any], key: str) -> Optional[Dict[str, Any]]:
-    mw = geom.get("marker_windows", None)
-    if not isinstance(mw, dict):
-        return None
-    pack = mw.get(key, None)
-    if not isinstance(pack, dict):
-        return None
-    xy = pack.get("xy", None)
-    if xy is None:
-        return None
-    try:
-        xy = np.asarray(xy, float)
-    except Exception:
-        return None
-    if xy.ndim != 2 or xy.shape[0] < 2 or xy.shape[1] != 2:
-        return None
-    return {
-        "xy": xy,
-        "closed": bool(pack.get("closed", False)),
-        "length_m": float(pack.get("length_m", np.nan)),
-    }
-
-
-def _seg_intersection_point(a1: np.ndarray, a2: np.ndarray, b1: np.ndarray, b2: np.ndarray) -> Optional[np.ndarray]:
-    """
-    Segment-segment intersection in 2D.
-    Returns point if segments intersect, else None.
-    """
-    a1 = np.asarray(a1, float)
-    a2 = np.asarray(a2, float)
-    b1 = np.asarray(b1, float)
-    b2 = np.asarray(b2, float)
-
-    da = a2 - a1
-    db = b2 - b1
-    M = np.array([[da[0], -db[0]], [da[1], -db[1]]], dtype=float)
-    rhs = b1 - a1
-
-    det = float(np.linalg.det(M))
-    if abs(det) < 1e-14:
-        return None
-
-    try:
-        t, u = np.linalg.solve(M, rhs)
-    except Exception:
-        return None
-
-    if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0:
-        return a1 + t * da
-    return None
-
-
-def _polyline_intersections(P: np.ndarray, Q: np.ndarray, closedP: bool = False, closedQ: bool = False) -> List[np.ndarray]:
-    P = np.asarray(P, float)
-    Q = np.asarray(Q, float)
-    out: List[np.ndarray] = []
-
-    if P.ndim != 2 or Q.ndim != 2 or P.shape[0] < 2 or Q.shape[0] < 2:
-        return out
-
-    nP = P.shape[0]
-    nQ = Q.shape[0]
-    mP = nP if closedP else (nP - 1)
-    mQ = nQ if closedQ else (nQ - 1)
-
-    for i in range(mP):
-        a1 = P[i]
-        a2 = P[(i + 1) % nP]
-        for j in range(mQ):
-            b1 = Q[j]
-            b2 = Q[(j + 1) % nQ]
-            hit = _seg_intersection_point(a1, a2, b1, b2)
-            if hit is not None:
-                out.append(np.asarray(hit, float))
-
-    # dedupe
-    uniq: List[np.ndarray] = []
-    for p in out:
-        keep = True
-        for q in uniq:
-            if np.linalg.norm(p - q) < 1e-7:
-                keep = False
-                break
-        if keep:
-            uniq.append(p)
-    return uniq
-
-
-def _compute_strike_points(lcfs: np.ndarray, wall_inner: np.ndarray) -> List[Tuple[float, float]]:
-    """
-    Intersections of LCFS with inner wall.
-    Returns all unique intersection points.
-    """
-    hits = _polyline_intersections(
-        np.asarray(lcfs, float),
-        np.asarray(wall_inner, float),
-        closedP=False,
-        closedQ=True,
-    )
-    out: List[Tuple[float, float]] = []
-    for h in hits:
-        out.append((float(h[0]), float(h[1])))
-    return out
-
-
-def _pick_lower_upper_points(points: List[Tuple[float, float]]) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
-    if not points:
-        return None, None
-    lower = min(points, key=lambda p: p[1])
-    upper = max(points, key=lambda p: p[1])
-    return lower, upper
-
-
-def _distance_point_to_window(point: Optional[Tuple[float, float]], win: Optional[Dict[str, Any]]) -> Optional[float]:
-    if point is None or win is None:
-        return None
-    try:
-        return float(_point_to_polyline_distance(point, win["xy"], closed=bool(win.get("closed", False))))
-    except Exception:
-        return None
 
 # ----------------------------
 # Objectives
@@ -456,12 +356,12 @@ def _misfit_diag(diag: Dict[str, Any], cfg: Any) -> Tuple[float, Dict[str, Any]]
     k_t  = _safe_float(getattr(cfg, "kappa_geom", 2.0), 2.0)
     d_t  = _safe_float(getattr(cfg, "delta_geom", 0.3), 0.3)
 
-    R0 = _safe_float(diag.get("R0", float("nan")))
-    A  = _safe_float(diag.get("A",  float("nan")))
-    k  = _safe_float(diag.get("kappa", float("nan")))
+    R0 = _safe_float(diag.get("R0", diag.get("R0_plasma", float("nan"))))
+    A  = _safe_float(diag.get("A",  diag.get("A_plasma",  float("nan"))))
+    k  = _safe_float(diag.get("kappa", diag.get("kappa_plasma", float("nan"))))
     du = _safe_float(diag.get("delta_u", float("nan")))
     dl = _safe_float(diag.get("delta_l", float("nan")))
-    a  = _safe_float(diag.get("a", float("nan")))
+    a  = _safe_float(diag.get("a", diag.get("a_plasma", float("nan"))))
 
     if not np.isfinite(R0 + A + k + du + dl + a):
         return 1e9, {"mode": "diag", "ok": False}
@@ -490,6 +390,11 @@ def _misfit_diag(diag: Dict[str, Any], cfg: Any) -> Tuple[float, Dict[str, Any]]
     if a < a_min:
         misfit += pen_thin * (a_min - a)
 
+    Rax = _safe_float(diag.get("R_ax", float("nan")))
+    if np.isfinite(Rax):
+        sig_Rax = float(getattr(cfg, "sig_Rax_m", 0.30))
+        misfit += abs((Rax - R0_t) / sig_Rax) * float(getattr(cfg, "w_Rax", 0.5))
+
     info = {
         "mode": "diag",
         "ok": True,
@@ -500,56 +405,39 @@ def _misfit_diag(diag: Dict[str, Any], cfg: Any) -> Tuple[float, Dict[str, Any]]
     return float(misfit), info
 
 
-
-def _misfit_cad(
-    geom: Dict[str, Any],
-    shape: Dict[str, Any],
-    diag: Dict[str, Any],
-    cfg: Any,
-    *,
-    null_mode: str,
-    enforce_inner: bool,
-    inner_tol: float,
-    inner_hard: bool,
-) -> Tuple[float, Dict[str, Any]]:
+def _misfit_cad(geom: Dict[str, Any], shape: Dict[str, Any], diag: Dict[str, Any], cfg: Any, null_mode: str) -> Tuple[float, Dict[str, Any]]:
     sig_R0 = float(getattr(cfg, "sig_R0_m", 0.25))
     sig_A  = float(getattr(cfg, "sig_A",    0.25))
     sig_k  = float(getattr(cfg, "sig_kappa",0.25))
     sig_d  = float(getattr(cfg, "sig_delta",0.20))
 
-    sig_x      = float(getattr(cfg, "sig_x_m", 0.20))
-    sig_shape  = float(getattr(cfg, "sig_shape_m", 0.05))
-    sig_strike = float(getattr(cfg, "sig_x_m", 0.20))
+    sig_x     = float(getattr(cfg, "sig_x_m", 0.20))
+    sig_shape = float(getattr(cfg, "sig_shape_m", 0.05))
 
     w_scalar = float(getattr(cfg, "w_scalar", 1.0))
     w_x      = float(getattr(cfg, "w_x", 1.0))
     w_shape  = float(getattr(cfg, "w_shape", 1.0))
-    w_strike = float(getattr(cfg, "w_x", 1.0))
 
-    penalty_no_sep    = float(getattr(cfg, "penalty_no_separatrix", 1e6))
-    penalty_no_xp     = float(getattr(cfg, "penalty_no_xpoints", 1e6))
-    penalty_no_strike = float(getattr(cfg, "penalty_no_xpoints", 1e6))
-    penalty_fallback  = float(getattr(cfg, "penalty_fallback_lcfs", 5e4))
+    penalty_no_sep   = float(getattr(cfg, "penalty_no_separatrix", 1e6))
+    penalty_no_xp    = float(getattr(cfg, "penalty_no_xpoints", 1e6))
+    penalty_fallback = float(getattr(cfg, "penalty_fallback_lcfs", 5e4))
 
-    pen_out_soft = float(getattr(cfg, "penalty_outside_inner", 5e5))
+    enforce_inner = bool(getattr(cfg, "enforce_inner_wall", True))
+    inner_tol = float(getattr(cfg, "inner_wall_frac_tol", 0.0))
+    inner_hard = bool(getattr(cfg, "inner_wall_hard_fail", False))
+    pen_out = float(getattr(cfg, "penalty_outside_inner", 5e5))
     pen_out_hard = float(getattr(cfg, "penalty_outside_inner_hard", 1e9))
     inner_radius = float(getattr(cfg, "inner_containment_radius", -1e-9))
-    pen_neg = float(getattr(cfg, "penalty_neg_delta", 10.0))
 
     target_curve, xt, scal = _targets_from_geom(geom)
-
     if (not diag) or (not diag.get("ok", False)):
         return 1e9, {"mode": "cad", "ok": False, "reason": "diag_not_ok"}
 
-    reason = str(shape.get("reason", "")).strip().lower()
-    has_true_sep = bool(shape.get("ok_sep", False)) and (reason == "ok")
+    ok_sep = bool(shape.get("ok_sep", False))
+    if not ok_sep:
+        return penalty_no_sep, {"mode": "cad", "ok": False, "reason": "no_separatrix"}
 
-    lcfs = _extract_lcfs_curve_from_shape(shape, diag)
-
-    win_xL = _extract_marker_window(geom, "xpt_lower")
-    win_xU = _extract_marker_window(geom, "xpt_upper")
-    win_sL = _extract_marker_window(geom, "strike_lower")
-    win_sU = _extract_marker_window(geom, "strike_upper")
+    lcfs = _extract_lcfs_curve_from_shape(shape)
 
     R0_t = scal.get("geom_R0_mid", float("nan"))
     A_t  = scal.get("geom_A_mid",  float("nan"))
@@ -587,152 +475,92 @@ def _misfit_cad(
     term_scalar *= (w_scalar ** 2)
 
     xps = _extract_xpoints(shape, diag)
+    if not xps:
+        return penalty_no_xp, {"mode": "cad", "ok": False, "reason": "no_xpoints"}
+
     lower_xp, upper_xp = _pick_lower_upper_xp(xps)
 
     null_mode = str(null_mode).strip().lower()
     if null_mode not in ("lower", "upper", "double"):
         null_mode = "lower"
 
-    dx_lower = None
-    dx_upper = None
+    dx_lower: Optional[float] = None
+    dx_upper: Optional[float] = None
     term_x = 0.0
-    pen_x = 0.0
 
     if null_mode in ("lower", "double"):
-        if win_xL is not None:
-            dx_lower = _distance_point_to_window(lower_xp, win_xL)
-        elif "lower" in xt and lower_xp is not None:
-            dx_lower = float(math.hypot(lower_xp[0] - xt["lower"][0], lower_xp[1] - xt["lower"][1]))
-        if dx_lower is None:
-            pen_x += penalty_no_xp
-        else:
-            term_x += (float(dx_lower) / max(sig_x, 1e-12)) ** 2
+        if "lower" not in xt or lower_xp is None:
+            return penalty_no_xp, {"mode": "cad", "ok": False, "reason": "missing_lower_target_or_xp"}
+        dx_lower = float(math.hypot(lower_xp[0] - xt["lower"][0], lower_xp[1] - xt["lower"][1]))
+        term_x += (dx_lower / max(sig_x, 1e-12)) ** 2
 
     if null_mode in ("upper", "double"):
-        if win_xU is not None:
-            dx_upper = _distance_point_to_window(upper_xp, win_xU)
-        elif "upper" in xt and upper_xp is not None:
-            dx_upper = float(math.hypot(upper_xp[0] - xt["upper"][0], upper_xp[1] - xt["upper"][1]))
-        if dx_upper is None:
-            pen_x += penalty_no_xp
-        else:
-            term_x += (float(dx_upper) / max(sig_x, 1e-12)) ** 2
+        if "upper" not in xt or upper_xp is None:
+            return penalty_no_xp, {"mode": "cad", "ok": False, "reason": "missing_upper_target_or_xp"}
+        dx_upper = float(math.hypot(upper_xp[0] - xt["upper"][0], upper_xp[1] - xt["upper"][1]))
+        term_x += (dx_upper / max(sig_x, 1e-12)) ** 2
 
     term_x *= (w_x ** 2)
 
-    lower_sp = None
-    upper_sp = None
-    ds_lower = None
-    ds_upper = None
-    term_strike = 0.0
-    pen_strike = 0.0
-
-    if (lcfs is not None) and ("R_inner" in geom) and ("Z_inner" in geom):
-        wall_inner = _open_curve_from_closed(np.asarray(geom["R_inner"], float), np.asarray(geom["Z_inner"], float))
-        strikes = _compute_strike_points(lcfs, wall_inner)
-        lower_sp, upper_sp = _pick_lower_upper_points(strikes)
-
-        if null_mode in ("lower", "double") and (win_sL is not None):
-            ds_lower = _distance_point_to_window(lower_sp, win_sL)
-            if ds_lower is None:
-                pen_strike += penalty_no_strike
-            else:
-                term_strike += (float(ds_lower) / max(sig_strike, 1e-12)) ** 2
-
-        if null_mode in ("upper", "double") and (win_sU is not None):
-            ds_upper = _distance_point_to_window(upper_sp, win_sU)
-            if ds_upper is None:
-                pen_strike += penalty_no_strike
-            else:
-                term_strike += (float(ds_upper) / max(sig_strike, 1e-12)) ** 2
-
-    term_strike *= (w_strike ** 2)
-
     term_shape = 0.0
-    shape_rms = None
-    if (target_curve is not None) and (lcfs is not None) and (lcfs.shape[0] >= 20) and (target_curve.shape[0] >= 20):
+    shape_rms: Optional[float] = None
+    if (lcfs is not None) and (target_curve is not None) and (lcfs.shape[0] >= 10) and (target_curve.shape[0] >= 10):
         sr = _rms_chamfer_sym(lcfs, target_curve)
         if np.isfinite(sr):
             shape_rms = float(sr)
             term_shape = (w_shape * (shape_rms / max(sig_shape, 1e-12))) ** 2
 
-    misfit = float(math.sqrt(term_scalar + term_x + term_strike + term_shape))
-    misfit += float(pen_x + pen_strike)
+    misfit = float(math.sqrt(term_scalar + term_x + term_shape))
 
-    if not has_true_sep:
-        misfit += penalty_no_sep
-
-    fallback_lcfs = False
-    try:
-        fb = shape.get("fallback_lcfs", None)
-        if fb is True:
-            fallback_lcfs = True
-        elif isinstance(fb, dict):
-            if fb.get("ok", False):
-                fallback_lcfs = True
-    except Exception:
-        pass
-    if fallback_lcfs and (not has_true_sep):
+    fallback_lcfs = _extract_fallback_lcfs_flag(shape=shape, diag=diag)
+    if fallback_lcfs:
         misfit += penalty_fallback
 
+    pen_neg = float(getattr(cfg, "penalty_neg_delta", 10.0))
     if du < 0.0 or dl < 0.0:
         misfit += pen_neg * (abs(min(du, 0.0)) + abs(min(dl, 0.0)))
 
-    frac_out_inner = None
-    inner_enforced = bool(enforce_inner and ("R_inner" in geom) and ("Z_inner" in geom) and (lcfs is not None))
-    if inner_enforced and lcfs is not None:
+    frac_out_inner: Optional[float] = None
+    if enforce_inner and ("R_inner" in geom) and ("Z_inner" in geom):
         wall_inner = _open_curve_from_closed(np.asarray(geom["R_inner"], float), np.asarray(geom["Z_inner"], float))
-        frac = _frac_outside(lcfs, wall_inner, radius=inner_radius)
-        frac_out_inner = float(frac) if np.isfinite(frac) else None
+        if lcfs is None or lcfs.shape[0] < 10 or wall_inner.shape[0] < 3:
+            frac_out_inner = None
+        else:
+            frac = _frac_outside(lcfs, wall_inner, radius=inner_radius)
+            frac_out_inner = float(frac) if np.isfinite(frac) else None
 
         if frac_out_inner is not None and frac_out_inner > float(inner_tol):
             if inner_hard:
-                return float(pen_out_hard), {
+                info = {
                     "mode": "cad",
                     "ok": False,
                     "reason": "lcfs_outside_inner",
                     "frac_out_inner": float(frac_out_inner),
                     "inner_tol": float(inner_tol),
-                    "has_true_separatrix": bool(has_true_sep),
                 }
-            misfit += float(pen_out_soft) * float(frac_out_inner)
+                return float(pen_out_hard), info
+            misfit += float(pen_out) * float(frac_out_inner)
 
     info = {
         "mode": "cad",
         "ok": True,
         "null_mode": null_mode,
-        "has_true_separatrix": bool(has_true_sep),
-        "ok_sep": bool(has_true_sep),
-        "n_xpoints": int(len(xps)),
-
+        "scalar_targets": {"R0": R0_t, "A": A_t, "kappa": k_t, "dbar": dbar_t},
+        "scalar_vals": {"R0": R0, "A": A, "kappa": k, "dbar": dbar},
         "dx_lower_m": dx_lower,
         "dx_upper_m": dx_upper,
-        "ds_lower_m": ds_lower,
-        "ds_upper_m": ds_upper,
-
-        "lower_xpoint": lower_xp,
-        "upper_xpoint": upper_xp,
-        "lower_strike": lower_sp,
-        "upper_strike": upper_sp,
-
         "shape_rms_m": shape_rms,
         "term_scalar": float(term_scalar),
         "term_x": float(term_x),
-        "term_strike": float(term_strike),
         "term_shape": float(term_shape),
-
+        "ok_sep": bool(ok_sep),
+        "n_xpoints": int(len(xps)),
         "fallback_lcfs": bool(fallback_lcfs),
         "frac_out_inner": frac_out_inner,
-        "inner_enforced": bool(inner_enforced),
-
-        "used_windows": {
-            "xpt_lower": bool(win_xL is not None),
-            "xpt_upper": bool(win_xU is not None),
-            "strike_lower": bool(win_sL is not None),
-            "strike_upper": bool(win_sU is not None),
-        },
+        "inner_enforced": bool(enforce_inner and ("R_inner" in geom) and ("Z_inner" in geom)),
     }
     return float(misfit), info
+
 
 # ----------------------------
 # Subprocess worker (single eval)
@@ -744,9 +572,6 @@ def _worker_eval(
     require_sep: bool,
     objective: str,
     null_mode: str,
-    enforce_inner: bool,
-    inner_tol: float,
-    inner_hard: bool,
     redirect_solver_noise: bool,
     conn,
 ) -> None:
@@ -779,31 +604,28 @@ def _worker_eval(
             except Exception:
                 diag = {"ok": False}
 
-        reason = str(shape.get("reason", "")).strip().lower()
-        has_true_sep = bool(shape.get("ok_sep", False)) and (reason == "ok")
-        xps = shape.get("xpoints", []) or []
-        n_xp = int(len(xps)) if isinstance(xps, (list, tuple)) else 0
+        ok_sep = bool(shape.get("ok_sep", False))
+        if require_sep and (not ok_sep):
+            res = {
+                "ok": True,
+                "ok_solve": True,
+                "require_sep_failed": True,
+                "misfit": 1e8,
+                "currents_A": dict(currents_A),
+                "diag": diag,
+                "shape_ok_sep": ok_sep,
+                "objective": objective,
+                "obj": {"mode": str(objective), "ok": False, "reason": "require_sep_failed"},
+            }
+            conn.send(res)
+            conn.close()
+            return
 
         objective = str(objective).strip().lower()
         if objective == "cad":
-            misfit, objinfo = _misfit_cad(
-                geom=geom, shape=shape, diag=diag, cfg=cfg,
-                null_mode=null_mode,
-                enforce_inner=bool(enforce_inner),
-                inner_tol=float(inner_tol),
-                inner_hard=bool(inner_hard),
-            )
+            misfit, objinfo = _misfit_cad(geom=geom, shape=shape, diag=diag, cfg=cfg, null_mode=null_mode)
         else:
             misfit, objinfo = _misfit_diag(diag=diag, cfg=cfg)
-
-        req_fail = False
-        req_reason = None
-        if require_sep and (not has_true_sep):
-            req_fail = True
-            req_reason = "require_sep_failed"
-        if require_sep and str(null_mode).lower().strip() == "double" and n_xp < 2:
-            req_fail = True
-            req_reason = "require_double_x_failed"
 
         res = {
             "ok": True,
@@ -811,10 +633,8 @@ def _worker_eval(
             "misfit": float(misfit),
             "currents_A": dict(currents_A),
             "diag": diag,
-            "shape_ok_sep": bool(has_true_sep),
+            "shape_ok_sep": ok_sep,
             "objective": objective,
-            "require_sep_failed": bool(req_fail),
-            "require_reason": req_reason,
             "obj": objinfo,
         }
         conn.send(res)
@@ -833,6 +653,7 @@ def _worker_eval(
         except Exception:
             pass
 
+
 def eval_case(
     currents_A: Dict[str, float],
     *,
@@ -842,9 +663,6 @@ def eval_case(
     cfg_overrides: Dict[str, Any],
     objective: str,
     null_mode: str,
-    enforce_inner: bool,
-    inner_tol: float,
-    inner_hard: bool,
     redirect_solver_noise: bool,
 ) -> Dict[str, Any]:
     ctx = mp.get_context("spawn")
@@ -858,9 +676,6 @@ def eval_case(
             bool(require_sep),
             str(objective),
             str(null_mode),
-            bool(enforce_inner),
-            float(inner_tol),
-            bool(inner_hard),
             bool(redirect_solver_noise),
             send_conn,
         ),
@@ -869,6 +684,7 @@ def eval_case(
     t0 = time.time()
     p.start()
 
+    # IMPORTANT: close send end in parent (Windows/spawn stability)
     try:
         send_conn.close()
     except Exception:
@@ -935,9 +751,6 @@ def refine(
     cfg_overrides: Dict[str, Any],
     objective: str,
     null_mode: str,
-    enforce_inner: bool,
-    inner_tol: float,
-    inner_hard: bool,
     redirect_solver_noise: bool,
     step0_MA: Dict[str, float],
     shrink: float,
@@ -981,9 +794,6 @@ def refine(
         cfg_overrides=cfg_overrides,
         objective=objective,
         null_mode=null_mode,
-        enforce_inner=enforce_inner,
-        inner_tol=inner_tol,
-        inner_hard=inner_hard,
         redirect_solver_noise=redirect_solver_noise,
     )
     best_m = float(best.get("misfit", 1e9)) if best.get("ok_solve", False) else 1e9
@@ -993,6 +803,9 @@ def refine(
     print("\n[INIT]")
     print(to_MA(x), "MA")
     print("misfit =", best_m)
+
+    if not best.get("ok_solve", False):
+        print("[WARN] init solve failed; refine may just shrink steps. Check config/DXF/targets.")
 
     try:
         import config_star_bean as cfg
@@ -1022,8 +835,8 @@ def refine(
             break
 
         results: List[Tuple[int, str, Dict[str, Any], float]] = []
-        t_iter0 = time.time()
 
+        t_iter0 = time.time()
         if verbose_evals:
             print(f"\n[ITER {it}] evaluating {len(moves)} neighbors with iter_workers={iter_workers} ...")
 
@@ -1039,9 +852,6 @@ def refine(
                     cfg_overrides=cfg_overrides,
                     objective=objective,
                     null_mode=null_mode,
-                    enforce_inner=enforce_inner,
-                    inner_tol=inner_tol,
-                    inner_hard=inner_hard,
                     redirect_solver_noise=redirect_solver_noise,
                 )
                 futs[fut] = (idx, tag, xt)
@@ -1121,9 +931,9 @@ def main():
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--dxf", type=str, default=None, help="DXF path (defaults to cfg.dxf_path inside star_equilibrium)")
-    ap.add_argument("--init", type=str, default=None, help="Init JSON (e.g. scan_multigoal_best.txt). Reads currents_MA if present.")
-    ap.add_argument("--timeout", type=float, default=360.0, help="Hard timeout per eval [s]")
-    ap.add_argument("--max-iters", type=int, default=200)
+    ap.add_argument("--init", type=str, default=None, help="Init JSON (e.g. scan_multigoal_best_global.json). Reads currents_MA if present.")
+    ap.add_argument("--timeout", type=float, default=140.0, help="Hard timeout per eval [s]")
+    ap.add_argument("--max-iters", type=int, default=30)
     ap.add_argument("--shrink", type=float, default=0.5)
     ap.add_argument("--min-step", type=float, default=0.02, help="Min step per scanned-family [MA]")
 
@@ -1134,7 +944,7 @@ def main():
 
     ap.add_argument("--step0", type=str, default="0.30,0.30,0.30",
                     help="Initial steps MA for scan keys, in same order as --scan-keys")
-    ap.add_argument("--bounds", type=str, default="-12,12,-15,15,-25,25",
+    ap.add_argument("--bounds", type=str, default="-5,5,-5,5,-5,5",
                     help="Bounds MA pairs for scan keys, in same order as --scan-keys: lo1,hi1, lo2,hi2, ...")
 
     ap.add_argument("--objective", type=str, default="cad", choices=["cad", "diag"],
@@ -1143,11 +953,7 @@ def main():
                     help="Which X-point(s) to match for CAD objective.")
     ap.add_argument("--require-sep", action="store_true", help="Penalize cases without separatrix (diverted requirement).")
 
-    ap.add_argument("--enforce-inner", action="store_true", help="Enforce LCFS inside WALL_INNER (if exists).")
-    ap.add_argument("--inner-tol", type=float, default=0.0, help="Allowed fraction outside inner wall.")
-    ap.add_argument("--inner-hard", action="store_true", help="Hard fail if outside inner wall beyond tol.")
-
-    ap.add_argument("--iter-workers", type=int, default=2, help="Max concurrent evals per iteration.")
+    ap.add_argument("--iter-workers", type=int, default=4, help="Max concurrent evals per iteration.")
     ap.add_argument("--verbose-evals", action="store_true", help="Print each neighbor eval summary.")
 
     ap.add_argument("--show-solver", action="store_true", help="Do NOT redirect solver noise (more verbose).")
@@ -1178,24 +984,17 @@ def main():
         else:
             x0_A[k] = 0.0
 
-    j = _load_json(args.init)
-
-    cm = None
-    if isinstance(j.get("currents_MA", None), dict):
-        cm = j["currents_MA"]
-    elif isinstance(j.get("currents_family_MA", None), dict):
-        cm = j["currents_family_MA"]          # <- nuestro inverse_star_native
-    elif isinstance(j.get("currents_family_A", None), dict):
-        cm = {k: float(v)/1e6 for k, v in j["currents_family_A"].items()}  # fallback
-
-    if isinstance(cm, dict):
-        any_hit = False
-        for k in all_keys:
-            if k in cm:
-                x0_A[k] = float(cm[k]) * 1e6
-                any_hit = True
-        if any_hit:
-            print("[INIT] using currents from JSON for keys:", {k: cm[k] for k in all_keys if k in cm})
+    if args.init:
+        j = _load_json(args.init)
+        cm = j.get("currents_MA", None)
+        if isinstance(cm, dict):
+            any_hit = False
+            for k in all_keys:
+                if k in cm:
+                    x0_A[k] = float(cm[k]) * 1e6
+                    any_hit = True
+            if any_hit:
+                print("[INIT] using currents_MA from JSON for keys:", {k: cm[k] for k in all_keys if k in cm})
 
     svals = [float(x.strip()) for x in args.step0.split(",") if x.strip()]
     if len(svals) != len(scan_keys):
@@ -1229,9 +1028,6 @@ def main():
         cfg_overrides=cfg_overrides,
         objective=str(args.objective),
         null_mode=str(args.null_mode),
-        enforce_inner=bool(args.enforce_inner),
-        inner_tol=float(args.inner_tol),
-        inner_hard=bool(args.inner_hard),
         redirect_solver_noise=(not bool(args.show_solver)),
         step0_MA=step0_MA,
         shrink=float(args.shrink),
@@ -1263,3 +1059,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
