@@ -191,6 +191,27 @@ class CADImportOptions:
     # Optional per-family overrides, e.g. {"CS": 35.0, "PF6": 45.0}
     family_J_override_A_per_mm2: Optional[Dict[str, float]] = None
 
+    # -------------------------
+    # Active coil discretization
+    # -------------------------
+    # If True, each CAD rectangular active coil is expanded into multiple
+    # smaller magnetic elements before building the FreeGS/freegs4e Machine.
+    coil_discretize_active: bool = True
+
+    # Target physical cell size for PF coils [m]
+    coil_target_dR_m: float = 0.12
+    coil_target_dZ_m: float = 0.12
+
+    # Target physical cell size for CS [m]
+    coil_target_dR_CS_m: float = 0.08
+    coil_target_dZ_CS_m: float = 0.18
+
+    # Safety clamps to avoid excessive filament counts
+    coil_nR_min: int = 2
+    coil_nZ_min: int = 2
+    coil_nR_max: int = 8
+    coil_nZ_max: int = 48
+
 
 # -----------------------------
 # Helpers
@@ -381,6 +402,147 @@ def _coil_from_rect_poly(xy: np.ndarray) -> Tuple[float, float, float, float]:
     dZ = 0.5 * (ymax - ymin)
     return Rc, Zc, dR, dZ
 
+def _active_coil_discretization_shape(label: str, dR: float, dZ: float, opts: CADImportOptions) -> Tuple[int, int]:
+    """
+    Choose nR, nZ from physical coil size, not from a fixed global grid.
+
+    dR, dZ are half-width and half-height of the CAD rectangular coil.
+    Full coil dimensions are:
+        width  = 2*dR
+        height = 2*dZ
+    """
+    fam = _coil_family(label)
+
+    width = 2.0 * float(dR)
+    height = 2.0 * float(dZ)
+
+    if width <= 0.0 or height <= 0.0:
+        raise ValueError(
+            f"Invalid active coil size for {label}: dR={dR}, dZ={dZ}"
+        )
+
+    if fam == "CS":
+        target_R = float(getattr(opts, "coil_target_dR_CS_m", 0.08))
+        target_Z = float(getattr(opts, "coil_target_dZ_CS_m", 0.18))
+    else:
+        target_R = float(getattr(opts, "coil_target_dR_m", 0.12))
+        target_Z = float(getattr(opts, "coil_target_dZ_m", 0.12))
+
+    target_R = max(target_R, 1.0e-6)
+    target_Z = max(target_Z, 1.0e-6)
+
+    nR = int(np.ceil(width / target_R))
+    nZ = int(np.ceil(height / target_Z))
+
+    nR_min = int(getattr(opts, "coil_nR_min", 2))
+    nZ_min = int(getattr(opts, "coil_nZ_min", 2))
+    nR_max = int(getattr(opts, "coil_nR_max", 8))
+    nZ_max = int(getattr(opts, "coil_nZ_max", 48))
+
+    nR = max(nR_min, min(nR, nR_max))
+    nZ = max(nZ_min, min(nZ, nZ_max))
+
+    return nR, nZ
+
+
+def _discretize_rect_coil_to_filaments(
+    label: str,
+    Rc: float,
+    Zc: float,
+    dR: float,
+    dZ: float,
+    *,
+    opts: CADImportOptions,
+) -> Dict[str, Tuple[float, float, float, float]]:
+    """
+    Convert one CAD rectangular active coil into many smaller magnetic elements.
+
+    Returns:
+        sub_label -> (R_sub, Z_sub, dR_sub, dZ_sub)
+
+    Important:
+    - dR_sub and dZ_sub are kept as geometry metadata.
+    - They should be used for area weights.
+    - They should NOT be passed positionally to MultiCoil as current/turns.
+    """
+    label = _normalize_label(label)
+
+    Rc = float(Rc)
+    Zc = float(Zc)
+    dR = float(dR)
+    dZ = float(dZ)
+
+    if dR <= 0.0 or dZ <= 0.0:
+        raise ValueError(
+            f"Invalid coil dimensions for {label}: "
+            f"Rc={Rc}, Zc={Zc}, dR={dR}, dZ={dZ}"
+        )
+
+    if not bool(getattr(opts, "coil_discretize_active", True)):
+        return {label: (Rc, Zc, dR, dZ)}
+
+    nR, nZ = _active_coil_discretization_shape(label, dR, dZ, opts)
+
+    if nR == 1 and nZ == 1:
+        return {label: (Rc, Zc, dR, dZ)}
+
+    Rmin = Rc - dR
+    Rmax = Rc + dR
+    Zmin = Zc - dZ
+    Zmax = Zc + dZ
+
+    # Cell centers.
+    Rs = np.linspace(Rmin, Rmax, nR + 2)[1:-1]
+    Zs = np.linspace(Zmin, Zmax, nZ + 2)[1:-1]
+
+    # Half-size of each subcell.
+    sub_dR = dR / float(nR)
+    sub_dZ = dZ / float(nZ)
+
+    out: Dict[str, Tuple[float, float, float, float]] = {}
+
+    k = 0
+    for i, R in enumerate(Rs):
+        for j, Z in enumerate(Zs):
+            k += 1
+            sub_label = f"{label}_F{k:03d}"
+            out[sub_label] = (
+                float(R),
+                float(Z),
+                float(sub_dR),
+                float(sub_dZ),
+            )
+
+    return out
+
+
+def _add_discretized_active_coil(
+    coils: Dict[str, Tuple[float, float, float, float]],
+    label: str,
+    Rc: float,
+    Zc: float,
+    dR: float,
+    dZ: float,
+    *,
+    opts: CADImportOptions,
+) -> None:
+    """
+    Add one CAD active coil to the coils dictionary, either as a single element
+    or as discretized sub-elements.
+    """
+    subcoils = _discretize_rect_coil_to_filaments(
+        label,
+        float(Rc),
+        float(Zc),
+        float(dR),
+        float(dZ),
+        opts=opts,
+    )
+
+    for sub_label, pack in subcoils.items():
+        if sub_label in coils:
+            raise ValueError(f"Duplicate active coil label after discretization: {sub_label}")
+        coils[sub_label] = pack
 
 def _subdivide_open_polyline_by_maxseg(poly_open: np.ndarray, max_len: float) -> np.ndarray:
     """
@@ -503,15 +665,37 @@ def _strip_auto_suffix(label: str) -> str:
     return re.sub(r"_[0-9]+$", "", str(label).strip().upper())
 
 
-def _coil_family(label: str) -> str:
-    lab = _strip_auto_suffix(_normalize_label(label))
-    if lab.startswith("CS"):
-        return "CS"
-    m = re.match(r"^(PF[0-9]+)", lab)
-    if m:
-        return m.group(1)
-    return lab
+# def _coil_family(label: str) -> str:
+#     lab = _strip_auto_suffix(_normalize_label(label))
+#     if lab.startswith("CS"):
+#         return "CS"
+#     m = re.match(r"^(PF[0-9]+)", lab)
+#     if m:
+#         return m.group(1)
+#     return lab
 
+def _coil_family(label: str) -> str:
+    """
+    Map detailed CAD/subcoil labels to current-control families.
+
+    Examples:
+        PF4U        -> PF4
+        PF4U_F001   -> PF4
+        PF4L_F017   -> PF4
+        CS1M        -> CS
+        CS1M_F012   -> CS
+    """
+    s = _normalize_label(label).upper()
+
+    if s.startswith("CS"):
+        return "CS"
+
+    for k in range(1, 10):
+        fam = f"PF{k}"
+        if s.startswith(fam):
+            return fam
+
+    return s
 
 def _area_from_dR_dZ(dR: float, dZ: float) -> float:
     a = 4.0 * float(dR) * float(dZ)
@@ -1458,7 +1642,16 @@ def load_geom_from_dxf(
                 k += 1
                 label = f"{base_label}_{k}"
 
-            coils[label] = (float(Rc), float(Zc), float(dR), float(dZ))
+            # coils[label] = (float(Rc), float(Zc), float(dR), float(dZ))
+            _add_discretized_active_coil(
+                coils,
+                label,
+                float(Rc),
+                float(Zc),
+                float(dR),
+                float(dZ),
+                opts=opts,
+            )
 
     else:
         coil_rects = polylines_in_layer(layers.coils_layer)
@@ -1485,7 +1678,16 @@ def load_geom_from_dxf(
                     f"Duplicate coil label '{label}' inferred from COILS/COIL_LABELS. "
                     "This mode is ambiguous. Prefer per-coil layers COIL_<NAME>."
                 )
-            coils[label] = (float(Rc), float(Zc), float(dR), float(dZ))
+            # coils[label] = (float(Rc), float(Zc), float(dR), float(dZ))
+            _add_discretized_active_coil(
+                coils,
+                label,
+                float(Rc),
+                float(Zc),
+                float(dR),
+                float(dZ),
+                opts=opts,
+            )
 
     # ---- Coil grouping (families + area weights)
     coil_groups: Dict[str, List[str]] = {}
@@ -1664,55 +1866,112 @@ def make_star_machine_from_cad(
 
     geom = load_geom_from_dxf(dxf, layers=layers, opts=opts)
 
+    # ------------------------------------------------------------------
     # Optional strict coil check (ACTIVE coils only)
+    #
+    # Compatible with both:
+    #   old labels: PF1U, PF1L, CS1M, ...
+    #   discretized labels: PF1U_F001, PF1U_F002, CS1M_F001, ...
+    #
+    # The check accepts an expected coil if:
+    #   1) the exact label exists,
+    #   2) its family exists in coil_groups / have_fams,
+    #   3) at least one actual coil label starts with expected_label + "_"
+    #      e.g. PF1U is satisfied by PF1U_F001.
+    # ------------------------------------------------------------------
     if strict_expected:
         if expected_coils is None:
-            expected_coils = {"CS", "PF1U", "PF1L", "PF2U", "PF2L", "PF3U", "PF3L"}
+            # After active-coil discretization, checking by family is more robust
+            # than requiring exact upper/lower labels.
+            expected_coils = {"CS", "PF1", "PF2", "PF3", "PF4", "PF5", "PF6"}
 
         have = set(_normalize_label(k) for k in geom["coils"].keys())
         have_fams = set(_coil_family(k) for k in have)
 
+        coil_groups = geom.get("coil_groups", {})
+        have_group_fams = set(_normalize_label(k) for k in coil_groups.keys())
+
         missing = []
+
         for exp in expected_coils:
             expn = _normalize_label(exp)
+            expfam = _coil_family(expn)
+
+            # Exact label exists.
             if expn in have:
                 continue
-            if expn in have_fams:
+
+            # Family exists, e.g. expected PF1 and have PF1U_F001/PF1L_F001.
+            if expn in have_fams or expn in have_group_fams:
                 continue
+
+            # Expected upper/lower prefix exists after discretization,
+            # e.g. expected PF1U and have PF1U_F001.
+            prefix_match = any(
+                lab == expn or lab.startswith(expn + "_")
+                for lab in have
+            )
+            if prefix_match:
+                continue
+
+            # Expected family exists even if expected was PF1U/PF1L.
+            if expfam in have_fams or expfam in have_group_fams:
+                continue
+
             missing.append(expn)
 
         if missing:
-            raise ValueError(f"Missing expected coils in CAD import: {sorted(missing)}")
+            raise ValueError(
+                f"Missing expected coils/families in CAD import: {sorted(missing)}"
+            )
 
     vessel_wall = machine.Wall(geom["R_outer"], geom["Z_outer"])
+
     limiter = None
     if "R_inner" in geom and "Z_inner" in geom:
         limiter = machine.Wall(geom["R_inner"], geom["Z_inner"])
 
     coils_for_machine = []
+
     for label, (Rc, Zc, dR, dZ) in geom["coils"].items():
         lab = _normalize_label(label)
-        c = machine.MultiCoil(float(Rc), float(Zc), float(dR), float(dZ))
+
+        # Important:
+        # MultiCoil's third and fourth arguments are current and turns,
+        # not physical dR/dZ. Geometry was already discretized into centers.
+        # Current is assigned later by apply_group_currents(...).
+        c = machine.MultiCoil(
+            float(Rc),
+            float(Zc),
+            current=0.0,
+            turns=1.0,
+        )
+
         try:
             c.label = lab
         except Exception:
             pass
+
         coils_for_machine.append((lab, c))
 
     # ---- Passive blanket filaments (current=0)
     passive_labels: List[str] = []
+
     if "blanket_filaments" in geom:
         for (lab0, Rc, Zc, dR, dZ) in geom["blanket_filaments"]:
             lab = _normalize_label(lab0)
             c = machine.MultiCoil(float(Rc), float(Zc), float(dR), float(dZ))
+
             try:
                 c.label = lab
             except Exception:
                 pass
+
             try:
                 c.current = 0.0
             except Exception:
                 pass
+
             coils_for_machine.append((lab, c))
             passive_labels.append(lab)
 
@@ -1725,17 +1984,21 @@ def make_star_machine_from_cad(
             pass
 
     active_labels = [_normalize_label(x) for x in geom["coils"].keys()]
+
     tokamak.active_coils = list(active_labels)
     tokamak.passive_coils = list(passive_labels)
 
     tokamak.R0 = float(geom.get("R0", np.nan))
     tokamak.geom = geom
+
+    # Includes active + passive coils.
     tokamak.coils_dict = {label: coil for label, coil in coils_for_machine}
+
+    # These are critical for apply_group_currents(...).
     tokamak.coil_groups = dict(geom.get("coil_groups", {}))
     tokamak.coil_group_weights = dict(geom.get("coil_group_weights", {}))
 
     return tokamak, geom
-
 
 # -----------------------------
 # Optional: apply grouped currents
