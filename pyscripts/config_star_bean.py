@@ -76,14 +76,37 @@ coil_group_mode = "area"   # "area" recomendado ("equal" también posible)
 # PF5_current = -1.32772381578e6
 # PF6_current = 8.31272773571e6
 
-CS_current = -40e6
-PF1_current = -1.5519747092e6
-PF2_current = -3.27221031079e6
-PF3_current = 1.88524947061e6
-PF4_current = 2.94928162575e6
-PF5_current = -1.26522381578e6
-PF6_current = 8.34397773571e6
+# CS_current = -40e6
+# PF1_current = -1.5519747092e6
+# PF2_current = -3.27221031079e6
+# PF3_current = 1.88524947061e6
+# PF4_current = 2.94928162575e6
+# PF5_current = -1.26522381578e6
+# PF6_current = 8.34397773571e6
 
+# CS_current  =  1.9999816859808093e6
+# PF1_current = -1.5519747091956937e6
+# PF2_current = -3.672210310794951e6
+# PF3_current =  2.185249470608207e6
+# PF4_current = -0.0007183742469442367e6
+# PF5_current = -1.852723815778954e6
+# PF6_current =  5.062727735707545e6
+
+# CS_current  =  -4500000.0*(5)
+# PF1_current = -1551471.3269405721
+# PF2_current = -3240319.0777849997
+# PF3_current =  1677766.7143307133
+# PF4_current = 6659703.18739089*(2)
+# PF5_current =  4864393.41851279*(-0.8)
+# PF6_current =  12124522.848095525*(0.3)
+
+CS_current  =  -4500000.0
+PF1_current = -1551471.3269405721
+PF2_current = -3240319.0777849997
+PF3_current =  1677766.7143307133
+PF4_current = -6659703.18739089
+PF5_current =  4864393.4185127
+PF6_current =  12124522.848095525
 
 BASE_FAMILY_CURRENTS_A = {
     "CS":  CS_current,

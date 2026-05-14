@@ -1,0 +1,262 @@
+{
+  "schema": "scan_corridor_branch_best.v1",
+  "best_rank_score": 40689.47867820667,
+  "best_gate_info": {
+    "accepted": true,
+    "fail_reasons": [],
+    "rank_score": 40689.47867820667,
+    "base_score": 800.507638969134,
+    "A": 1.334540254717579,
+    "kappa": 1.9419805625289015,
+    "delta_bar": 0.34035825654999574,
+    "chamfer": 0.5793129535321123,
+    "Rax": 3.841737915937715,
+    "Zax": 0.0,
+    "legU": 2.1356803147631322,
+    "legL": 2.1363497505762696,
+    "PF6_MA": 5.520687421327304
+  },
+  "best_currents_A": {
+    "CS": 1532658.2982019938,
+    "PF1": -905926.2567939468,
+    "PF2": -6860264.5999440905,
+    "PF3": 4637061.487762942,
+    "PF4": 5907407.685285886,
+    "PF5": -2735593.587440233,
+    "PF6": 5520687.421327304
+  },
+  "best_currents_MA": {
+    "CS": 1.5326582982019938,
+    "PF1": -0.9059262567939469,
+    "PF2": -6.860264599944091,
+    "PF3": 4.637061487762942,
+    "PF4": 5.907407685285886,
+    "PF5": -2.735593587440233,
+    "PF6": 5.520687421327304
+  },
+  "best_result": {
+    "ok": true,
+    "ok_solve": true,
+    "score": 102377.68898824268,
+    "score_info": {
+      "ok": true,
+      "has_true_sep": true,
+      "shape_reason": "ok",
+      "n_xpoints": 4,
+      "fail_reasons": [],
+      "score_total": 800.507638969134,
+      "axis_term": 0.6261721812934427,
+      "shape_term": 26.763631872829453,
+      "boundary_term": 10.358132658336402,
+      "x_term": 5.898034991314511,
+      "sym_term": 0.0,
+      "reg_term": 9.132980204510718,
+      "cs_reg_term": 0.0070459037236435,
+      "step_reg_term": 3.076003218223058,
+      "Rax": 3.841737915937715,
+      "Zax": 0.0,
+      "R0": 3.444955917677646,
+      "A": 1.334540254717579,
+      "kappa": 1.9419805625289015,
+      "delta_u": 0.34035825654999574,
+      "delta_l": 0.34035825654999574,
+      "delta_bar": 0.34035825654999574,
+      "boundary_chamfer_m": 0.5793129535321123,
+      "lower_xpoint": [
+        2.4504185392669777,
+        -5.153583425964405
+      ],
+      "upper_xpoint": [
+        2.4504185392669777,
+        5.153583425964405
+      ],
+      "dx_lower_m": 0.6010446266443231,
+      "dx_upper_m": 0.6010446266443231,
+      "leg_corridor_penalty": 101577.18134927354,
+      "leg_corridor_term": 45.06232426495822,
+      "leg_upper_distance_m": 2.1356803147631322,
+      "leg_lower_distance_m": 2.1363497505762696,
+      "leg_corridor_available": true,
+      "leg_corridor_info": {
+        "corridor_available": true,
+        "leg_upper_distance_m": 2.1356803147631322,
+        "leg_lower_distance_m": 2.1363497505762696,
+        "leg_corridor_term": 45.06232426495822,
+        "leg_corridor_penalty": 101577.18134927354,
+        "leg_upper_info": {
+          "ok": true,
+          "d_total_m": 2.1356803147631322,
+          "d_win_to_lcfs_m": 2.107513906704414,
+          "d_lcfs_to_win_m": 2.2,
+          "roi_hit": false,
+          "n_lcfs_half": 140,
+          "n_lcfs_roi": 0,
+          "window_length_m": 1.4087005811859488
+        },
+        "leg_lower_info": {
+          "ok": true,
+          "d_total_m": 2.1363497505762696,
+          "d_win_to_lcfs_m": 2.1084829538886445,
+          "d_lcfs_to_win_m": 2.2,
+          "roi_hit": false,
+          "n_lcfs_half": 140,
+          "n_lcfs_roi": 0,
+          "window_length_m": 1.4087005811859488
+        }
+      },
+      "score_total_with_corridor": 102377.68898824268
+    },
+    "currents_A": {
+      "CS": 1532658.2982019938,
+      "PF1": -905926.2567939468,
+      "PF2": -6860264.5999440905,
+      "PF3": 4637061.487762942,
+      "PF4": 5907407.685285886,
+      "PF5": -2735593.587440233,
+      "PF6": 5520687.421327304
+    },
+    "currents_MA": {
+      "CS": 1.5326582982019938,
+      "PF1": -0.9059262567939469,
+      "PF2": -6.860264599944091,
+      "PF3": 4.637061487762942,
+      "PF4": 5.907407685285886,
+      "PF5": -2.735593587440233,
+      "PF6": 5.520687421327304
+    },
+    "physics": {
+      "Ip_A": 4000000.0,
+      "paxis_Pa": 2000.0,
+      "fvac": 20.8,
+      "alpha_m": 1.5,
+      "alpha_n": 1.1
+    },
+    "diag": {
+      "ok": true,
+      "R0": 3.444955917677646,
+      "Z0": 0.0013259975204196195,
+      "a": 2.581380295948197,
+      "A": 1.334540254717579,
+      "kappa": 1.9419805625289015,
+      "delta_u": 0.34035825654999574,
+      "delta_l": 0.34035825654999574,
+      "area_m2": 37.23207620653025,
+      "Rmin": 0.8635756217294495,
+      "Rmax": 6.026336213625843,
+      "Zmin": -5.011664361706082,
+      "Zmax": 5.014316356746921,
+      "method": "analyze_star_separatrix",
+      "R_ax": 3.841737915937715,
+      "Z_ax": 0.0
+    },
+    "shape": {
+      "ok_sep": true,
+      "reason": "ok",
+      "xpoints": [
+        {
+          "R": 2.4504185392669777,
+          "Z": -5.153583425964405,
+          "psi": 0.19281918861722977,
+          "grad2": 4.818761393740826e-05
+        },
+        {
+          "R": 2.4504185392669777,
+          "Z": 5.153583425964405,
+          "psi": 0.19290400077889078,
+          "grad2": 4.8206925642240224e-05
+        },
+        {
+          "R": 2.2185319764885216,
+          "Z": -5.153583425964405,
+          "psi": 0.19035136720178586,
+          "grad2": 0.0008747933503196225
+        },
+        {
+          "R": 2.2185319764885216,
+          "Z": 5.153583425964405,
+          "psi": 0.1904230438019831,
+          "grad2": 0.0008765036929788061
+        }
+      ],
+      "xpoints_valid": [
+        {
+          "R": 2.4504185392669777,
+          "Z": -5.153583425964405,
+          "psi": 0.19281918861722977,
+          "grad2": 4.818761393740826e-05
+        },
+        {
+          "R": 2.4504185392669777,
+          "Z": 5.153583425964405,
+          "psi": 0.19290400077889078,
+          "grad2": 4.8206925642240224e-05
+        },
+        {
+          "R": 2.2185319764885216,
+          "Z": -5.153583425964405,
+          "psi": 0.19035136720178586,
+          "grad2": 0.0008747933503196225
+        },
+        {
+          "R": 2.2185319764885216,
+          "Z": 5.153583425964405,
+          "psi": 0.1904230438019831,
+          "grad2": 0.0008765036929788061
+        }
+      ],
+      "psi_sep": 0.19281918861722977,
+      "psi_eval": 0.19536280643253454
+    },
+    "geom_summary": {
+      "marker_windows": [
+        "leg_lower",
+        "leg_upper",
+        "strike_lower",
+        "strike_upper",
+        "xpt_lower",
+        "xpt_upper"
+      ]
+    }
+  },
+  "physics": {
+    "Ip_A": 4000000.0,
+    "paxis_Pa": 2000.0,
+    "fvac": 20.8,
+    "alpha_m": 1.5,
+    "alpha_n": 1.1
+  },
+  "target_path": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\targets\\star_simplified_dn_target.json",
+  "seed_path": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\seeds\\branch_probe_low_pf6.json",
+  "dxf_path": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\cad\\star_baseline.dxf",
+  "bounds_MA": {
+    "CS": [
+      0.0,
+      4.5
+    ],
+    "PF1": [
+      -2.0,
+      1.0
+    ],
+    "PF2": [
+      -12.0,
+      -3.0
+    ],
+    "PF3": [
+      2.0,
+      8.0
+    ],
+    "PF4": [
+      4.0,
+      10.0
+    ],
+    "PF5": [
+      -9.0,
+      -1.0
+    ],
+    "PF6": [
+      0.0,
+      9.0
+    ]
+  },
+  "log_jsonl": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\scan_corridor_branch_results.jsonl"
+}

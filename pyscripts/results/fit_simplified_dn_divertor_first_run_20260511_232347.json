@@ -1,0 +1,284 @@
+{
+  "schema": "fit_simplified_dn_divertor_first_run.v1",
+  "best_score": 521500.0,
+  "best_currents_A": {
+    "CS": 2679051.1340342364,
+    "PF1": -3442818.4148602504,
+    "PF2": -946186.771592534,
+    "PF3": 1781804.096568741,
+    "PF4": 4428256.504395843,
+    "PF5": 6485034.612820287,
+    "PF6": 6500000.0
+  },
+  "best_currents_MA": {
+    "CS": 2.6790511340342364,
+    "PF1": -3.4428184148602505,
+    "PF2": -0.9461867715925341,
+    "PF3": 1.781804096568741,
+    "PF4": 4.428256504395843,
+    "PF5": 6.485034612820288,
+    "PF6": 6.5
+  },
+  "best_result": {
+    "ok": true,
+    "ok_solve": true,
+    "score": 521500.0,
+    "score_info": {
+      "ok": true,
+      "has_true_sep": true,
+      "shape_reason": "ok",
+      "n_xpoints": 4,
+      "fail_reasons": [],
+      "score_total": 429.6392989231903,
+      "axis_term": 0.04477202649202791,
+      "shape_term": 15.180141885952784,
+      "boundary_term": 5.188106839787669,
+      "x_term": 2.8431553554477813,
+      "sym_term": 0.0,
+      "reg_term": 6.060601891398851,
+      "cs_reg_term": 0.021528215323703057,
+      "step_reg_term": 0.0,
+      "Rax": 3.9576811973269432,
+      "Zax": 0.0,
+      "R0": 3.6569987913013264,
+      "A": 1.5063222039718396,
+      "kappa": 2.0310203533001894,
+      "delta_u": 0.3537203266559256,
+      "delta_l": 0.3537203266559256,
+      "delta_bar": 0.3537203266559256,
+      "boundary_chamfer_m": 0.40999348971553257,
+      "lower_xpoint": [
+        2.682305102045434,
+        -5.048408254005948
+      ],
+      "upper_xpoint": [
+        2.682305102045434,
+        5.048408254005948
+      ],
+      "dx_lower_m": 0.4173047633578804,
+      "dx_upper_m": 0.4173047633578804,
+      "leg_corridor_penalty": 0.0,
+      "leg_corridor_term": 54.713687150267596,
+      "leg_upper_distance_m": 2.353475196303238,
+      "leg_lower_distance_m": 2.3538640887516475,
+      "leg_corridor_available": true,
+      "leg_corridor_info": {
+        "corridor_available": true,
+        "leg_upper_distance_m": 2.353475196303238,
+        "leg_lower_distance_m": 2.3538640887516475,
+        "leg_corridor_term": 54.713687150267596,
+        "leg_corridor_penalty": 0.0,
+        "leg_upper_info": {
+          "ok": true,
+          "d_total_m": 2.353475196303238,
+          "d_win_to_lcfs_m": 2.489648712918169,
+          "d_lcfs_to_win_m": 2.0,
+          "roi_hit": false,
+          "n_lcfs_half": 136,
+          "n_lcfs_roi": 0,
+          "window_length_m": 1.8390452570891647
+        },
+        "leg_lower_info": {
+          "ok": true,
+          "d_total_m": 2.3538640887516475,
+          "d_win_to_lcfs_m": 2.4901738746850084,
+          "d_lcfs_to_win_m": 2.0,
+          "roi_hit": false,
+          "n_lcfs_half": 136,
+          "n_lcfs_roi": 0,
+          "window_length_m": 1.8390452570891647
+        }
+      },
+      "score_total_with_corridor": 429.6392989231903,
+      "divertor_first_score": 521500.0,
+      "strike_distances_m": {
+        "STRIKE_U_IN": Infinity,
+        "STRIKE_U_OUT": Infinity,
+        "STRIKE_L_IN": Infinity,
+        "STRIKE_L_OUT": Infinity
+      },
+      "strike_max_distance_m": null,
+      "xpoint_distances_m": {},
+      "leg_distances_m": {}
+    },
+    "currents_A": {
+      "CS": 2679051.1340342364,
+      "PF1": -3442818.4148602504,
+      "PF2": -946186.771592534,
+      "PF3": 1781804.096568741,
+      "PF4": 4428256.504395843,
+      "PF5": 6485034.612820287,
+      "PF6": 6500000.0
+    },
+    "currents_MA": {
+      "CS": 2.6790511340342364,
+      "PF1": -3.4428184148602505,
+      "PF2": -0.9461867715925341,
+      "PF3": 1.781804096568741,
+      "PF4": 4.428256504395843,
+      "PF5": 6.485034612820288,
+      "PF6": 6.5
+    },
+    "physics": {
+      "Ip_A": 4000000.0,
+      "paxis_Pa": 2000.0,
+      "fvac": 20.8,
+      "alpha_m": 1.5,
+      "alpha_n": 1.1
+    },
+    "diag": {
+      "ok": true,
+      "R0": 3.6569987913013264,
+      "Z0": 0.0008390981730919123,
+      "a": 2.427766636950997,
+      "A": 1.5063222039718396,
+      "kappa": 2.0310203533001894,
+      "delta_u": 0.3537203266559256,
+      "delta_l": 0.3537203266559256,
+      "area_m2": 34.652829969344836,
+      "Rmin": 1.2292321543503297,
+      "Rmax": 6.084765428252323,
+      "Zmin": -4.930004354537535,
+      "Zmax": 4.9316825508837185,
+      "method": "analyze_star_separatrix",
+      "R_ax": 3.9576811973269432,
+      "Z_ax": 0.0
+    },
+    "shape": {
+      "ok_sep": true,
+      "reason": "ok",
+      "xpoints": [
+        {
+          "R": 2.682305102045434,
+          "Z": -5.048408254005948,
+          "psi": 0.37792783964890486,
+          "grad2": 5.8338063896735345e-05
+        },
+        {
+          "R": 2.682305102045434,
+          "Z": 5.048408254005948,
+          "psi": 0.3779778697381589,
+          "grad2": 5.8505817987166374e-05
+        },
+        {
+          "R": 2.91419166482389,
+          "Z": -5.048408254005948,
+          "psi": 0.37586219121938486,
+          "grad2": 0.0014019497740679514
+        },
+        {
+          "R": 2.91419166482389,
+          "Z": 5.048408254005948,
+          "psi": 0.3759191595428505,
+          "grad2": 0.001402005982164882
+        }
+      ],
+      "xpoints_valid": [
+        {
+          "R": 2.682305102045434,
+          "Z": -5.048408254005948,
+          "psi": 0.37792783964890486,
+          "grad2": 5.8338063896735345e-05
+        },
+        {
+          "R": 2.682305102045434,
+          "Z": 5.048408254005948,
+          "psi": 0.3779778697381589,
+          "grad2": 5.8505817987166374e-05
+        },
+        {
+          "R": 2.91419166482389,
+          "Z": -5.048408254005948,
+          "psi": 0.37586219121938486,
+          "grad2": 0.0014019497740679514
+        },
+        {
+          "R": 2.91419166482389,
+          "Z": 5.048408254005948,
+          "psi": 0.3759191595428505,
+          "grad2": 0.001402005982164882
+        }
+      ],
+      "psi_sep": 0.37792783964890486,
+      "psi_eval": 0.38023041229862314
+    },
+    "geom_summary": {
+      "marker_windows": [
+        "STRIKE_L_IN",
+        "STRIKE_L_OUT",
+        "STRIKE_U_IN",
+        "STRIKE_U_OUT",
+        "leg_lower",
+        "leg_upper"
+      ]
+    },
+    "divertor_first_score": 521500.0,
+    "divertor_first_info": {
+      "divertor_first_score": 521500.0,
+      "no_sep_penalty": 0.0,
+      "hard_wall_penalty": 0.0,
+      "has_true_sep": true,
+      "shape_reason": "ok",
+      "strike_score": 500000.0,
+      "strike_distances_m": {
+        "STRIKE_U_IN": Infinity,
+        "STRIKE_U_OUT": Infinity,
+        "STRIKE_L_IN": Infinity,
+        "STRIKE_L_OUT": Infinity
+      },
+      "strike_nearest_points": {
+        "STRIKE_U_IN": null,
+        "STRIKE_U_OUT": null,
+        "STRIKE_L_IN": null,
+        "STRIKE_L_OUT": null
+      },
+      "strike_missing": [
+        "STRIKE_U_IN",
+        "STRIKE_U_OUT",
+        "STRIKE_L_IN",
+        "STRIKE_L_OUT"
+      ],
+      "has_separatrix_curve_for_strikes": false,
+      "xpoint_score": 20000.0,
+      "xpoint_distances_m": {},
+      "xpoints_found": [],
+      "leg_score": 1500.0,
+      "leg_distances_m": {},
+      "shape_soft_score": 0.0,
+      "A": 1.5063222039718396,
+      "kappa": 2.0310203533001894,
+      "delta_bar": 0.3537203266559256,
+      "boundary_chamfer_m": 0.40999348971553257,
+      "current_reg_score": 0.0
+    }
+  },
+  "physics": {
+    "Ip_A": 4000000.0,
+    "paxis_Pa": 2000.0,
+    "fvac": 20.8,
+    "alpha_m": 1.5,
+    "alpha_n": 1.1
+  },
+  "target_path": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\targets\\star_simplified_dn_target.json",
+  "seed_path": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\gap_v2_pf6_6p5_pf5_soft_release_best.json",
+  "dxf_path": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\cad\\star_baseline.dxf",
+  "free_keys": [
+    "CS",
+    "PF1",
+    "PF2",
+    "PF3",
+    "PF4",
+    "PF5"
+  ],
+  "windows_available": [
+    "LEG_LOWER",
+    "LEG_UPPER",
+    "STRIKE_L_IN",
+    "STRIKE_L_OUT",
+    "STRIKE_U_IN",
+    "STRIKE_U_OUT"
+  ],
+  "best_json": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\fit_simplified_dn_divertor_first_best.json",
+  "log_jsonl": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\fit_simplified_dn_divertor_first_results.jsonl",
+  "runtime_s": 197.43056392669678
+}

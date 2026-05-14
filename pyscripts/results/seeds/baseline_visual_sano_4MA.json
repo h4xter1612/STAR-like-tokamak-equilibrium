@@ -1,0 +1,28 @@
+{
+  "schema": "star_seed_currents.v1",
+  "name": "baseline_visual_sano_4MA",
+  "description": "Baseline visualmente sano: Ip=4 MA, paxis=2e3 Pa, fvac=20.8, alpha_m=1.5, alpha_n=1.1. No es el objetivo final STAR, pero es una rama más limpia que los refines con CS extremo.",
+  "Ip_A": 4000000.0,
+  "paxis_Pa": 2000.0,
+  "fvac": 20.8,
+  "alpha_m": 1.5,
+  "alpha_n": 1.1,
+  "currents_A": {
+    "CS": 1999981.6859808094,
+    "PF1": -1551974.7091956937,
+    "PF2": -3672210.310794951,
+    "PF3": 2185249.470608207,
+    "PF4": -718.3742469442367,
+    "PF5": -1852723.815778954,
+    "PF6": 5062727.735707545
+  },
+  "currents_MA": {
+    "CS": 1.9999816859808094,
+    "PF1": -1.5519747091956938,
+    "PF2": -3.672210310794951,
+    "PF3": 2.185249470608207,
+    "PF4": -0.0007183742469442367,
+    "PF5": -1.852723815778954,
+    "PF6": 5.062727735707545
+  }
+}

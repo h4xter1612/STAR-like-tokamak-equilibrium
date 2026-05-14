@@ -1,0 +1,96 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20260507014644
+Username: H4XTER\conej
+RunAs User: H4XTER\conej
+Configuration Name: 
+Machine: H4XTER (Microsoft Windows NT 10.0.26200.0)
+Host Application: C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
+Process ID: 8028
+PSVersion: 5.1.26100.8328
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.8328
+BuildVersion: 10.0.26100.8328
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+Transcript started, output file is .\results\pf6_deep_night_6p5_to_5p0_log.txt
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\make_one_pf6_seed.py --base .\results\gap_v2_pf6_7p0MA_screen_best.json --pf6-ma 6.5 --out .\results\seeds\gap_v2_pf6_6p5MA_from_7p0_long.json
+[OK] wrote results\seeds\gap_v2_pf6_6p5MA_from_7p0_long.json
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\fit_simplified_dn_toposafe.py --target .\results\targets\star_simplified_dn_target.json --seed .\results\seeds\gap_v2_pf6_6p5MA_from_7p0_long.json --stage release-cs --iters 28 --pop 22 --workers 6 --timeout 180 --widen 0.13 --sigma-frac 0.15 --free-keys CS,PF1,PF2,PF3,PF4,PF5 --no-early-stop --dxf .\cad\star_baseline.dxf
+[ITER 011] batch_best=454.715 global_best=454.71          | ok=17/22 sep=4/22 | A=1.530 k=2.090 d=0.340 Rax=4.074 CS=+2.499 MA | 390.6s
+[ITER 012] batch_best=454.72 global_best=454.71          | ok=19/22 sep=7/22 | A=1.530 k=2.090 d=0.340 Rax=4.074 CS=+2.499 MA | 332.1s
+[ITER 013] batch_best=454.709 global_best=454.709 IMPROVED | ok=16/22 sep=8/22 | A=1.530 k=2.090 d=0.340 Rax=4.074 CS=+2.499 MA | 380.9s
+[ITER 014] batch_best=454.715 global_best=454.709          | ok=17/22 sep=9/22 | A=1.530 k=2.090 d=0.340 Rax=4.074 CS=+2.499 MA | 368.3s
+[ITER 015] batch_best=454.709 global_best=454.709          | ok=14/22 sep=10/22 | A=1.530 k=2.090 d=0.340 Rax=4.074 CS=+2.499 MA | 375.1s
+[ITER 016] batch_best=454.702 global_best=454.702 IMPROVED | ok=16/22 sep=8/22 | A=1.530 k=2.090 d=0.340 Rax=4.074 CS=+2.499 MA | 391.8s
+[ITER 017] batch_best=454.71 global_best=454.702          | ok=18/22 sep=8/22 | A=1.530 k=2.090 d=0.340 Rax=4.074 CS=+2.499 MA | 336.9s
+[ITER 018] batch_best=451.966 global_best=451.966 IMPROVED | ok=14/22 sep=6/22 | A=1.489 k=1.991 d=0.357 Rax=4.074 CS=+2.336 MA | 384.1s
+[ITER 019] batch_best=448.473 global_best=448.473 IMPROVED | ok=15/22 sep=7/22 | A=1.489 k=1.991 d=0.357 Rax=4.074 CS=+2.336 MA | 455.8s
+[ITER 020] batch_best=448.473 global_best=448.473          | ok=17/22 sep=12/22 | A=1.489 k=1.991 d=0.357 Rax=4.074 CS=+2.336 MA | 303.7s
+[ITER 021] batch_best=448.473 global_best=448.473 IMPROVED | ok=17/22 sep=11/22 | A=1.489 k=1.991 d=0.357 Rax=4.074 CS=+2.336 MA | 279.3s
+[ITER 022] batch_best=448.475 global_best=448.473          | ok=17/22 sep=11/22 | A=1.489 k=1.991 d=0.357 Rax=4.074 CS=+2.336 MA | 360.7s
+[ITER 023] batch_best=448.473 global_best=448.473          | ok=20/22 sep=14/22 | A=1.489 k=1.991 d=0.357 Rax=4.074 CS=+2.336 MA | 234.5s
+[ITER 024] batch_best=444.435 global_best=444.435 IMPROVED | ok=15/22 sep=10/22 | A=1.494 k=2.000 d=0.356 Rax=4.074 CS=+2.280 MA | 365.0s
+[ITER 025] batch_best=444.42 global_best=444.42 IMPROVED | ok=17/22 sep=12/22 | A=1.494 k=1.999 d=0.356 Rax=4.074 CS=+2.280 MA | 268.0s
+[ITER 026] batch_best=444.35 global_best=444.35 IMPROVED | ok=15/22 sep=12/22 | A=1.494 k=1.999 d=0.356 Rax=4.074 CS=+2.280 MA | 368.6s
+[ITER 027] batch_best=444.449 global_best=444.35          | ok=14/22 sep=8/22 | A=1.494 k=1.999 d=0.356 Rax=4.074 CS=+2.280 MA | 416.2s
+[ITER 028] batch_best=444.392 global_best=444.35          | ok=16/22 sep=8/22 | A=1.494 k=1.999 d=0.356 Rax=4.074 CS=+2.280 MA | 370.7s
+
+[OK] finished
+[OK] best score: 444.35
+[OK] best currents [MA]: CS=+2.280, PF1=-3.455, PF2=-0.335, PF3=+1.113, PF4=+5.034, PF5=+6.335, PF6=+6.500
+[OK] best json: C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts\results\fit_simplified_dn_toposafe_best.json
+[OK] run json : C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts\results\fit_simplified_dn_toposafe_run_20260507
+_014644.json
+[OK] log jsonl: C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts\results\fit_simplified_dn_toposafe_results.json
+l
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) Copy-Item .\results\fit_simplified_dn_toposafe_best.json .\results\gap_v2_pf6_6p5MA_long_best.json
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\make_one_pf6_seed.py --base .\results\gap_v2_pf6_6p5MA_long_best.json --pf6-ma 6.0 --out .\results\seeds\gap_v2_pf6_6p0MA_from_6p5_long.json
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\fit_simplified_dn_toposafe.py --target .\results\targets\star_simplified_dn_target.json --seed .\results\seeds\gap_v2_pf6_6p0MA_from_6p5_long.json --stage release-cs --iters 28 --pop 22 --workers 6 --timeout 180 --widen 0.15 --sigma-frac 0.17 --free-keys CS,PF1,PF2,PF3,PF4,PF5 --no-early-stop --dxf .\cad\star_baseline.dxf
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) Copy-Item .\results\fit_simplified_dn_toposafe_best.json .\results\gap_v2_pf6_6p0MA_long_best.json
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\make_one_pf6_seed.py --base .\results\gap_v2_pf6_6p0MA_long_best.json --pf6-ma 5.5 --out .\results\seeds\gap_v2_pf6_5p5MA_from_6p0_long.json
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\fit_simplified_dn_toposafe.py --target .\results\targets\star_simplified_dn_target.json --seed .\results\seeds\gap_v2_pf6_5p5MA_from_6p0_long.json --stage release-cs --iters 30 --pop 24 --workers 6 --timeout 180 --widen 0.17 --sigma-frac 0.19 --free-keys CS,PF1,PF2,PF3,PF4,PF5 --no-early-stop --dxf .\cad\star_baseline.dxf
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) Copy-Item .\results\fit_simplified_dn_toposafe_best.json .\results\gap_v2_pf6_5p5MA_long_best.json
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\make_one_pf6_seed.py --base .\results\gap_v2_pf6_5p5MA_long_best.json --pf6-ma 5.0 --out .\results\seeds\gap_v2_pf6_5p0MA_from_5p5_long.json
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\fit_simplified_dn_toposafe.py --target .\results\targets\star_simplified_dn_target.json --seed .\results\seeds\gap_v2_pf6_5p0MA_from_5p5_long.json --stage release-cs --iters 30 --pop 24 --workers 6 --timeout 180 --widen 0.19 --sigma-frac 0.21 --free-keys CS,PF1,PF2,PF3,PF4,PF5 --no-early-stop --dxf .\cad\star_baseline.dxf
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) Copy-Item .\results\fit_simplified_dn_toposafe_best.json .\results\gap_v2_pf6_5p0MA_long_best.json
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) Stop-Transcript
+**********************
+Windows PowerShell transcript end
+End time: 20260507134132
+**********************

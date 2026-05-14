@@ -1,0 +1,18 @@
+{
+  "schema": "star_seed_currents.v1",
+  "name": "branch_probe_low_pf6",
+  "Ip_A": 4000000.0,
+  "paxis_Pa": 2000.0,
+  "fvac": 20.8,
+  "alpha_m": 1.5,
+  "alpha_n": 1.1,
+  "currents_A": {
+    "CS": 2000000.0,
+    "PF1": 0.0,
+    "PF2": -6500000.0,
+    "PF3": 4000000.0,
+    "PF4": 6000000.0,
+    "PF5": -4000000.0,
+    "PF6": 6000000.0
+  }
+}

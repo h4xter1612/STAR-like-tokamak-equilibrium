@@ -80,6 +80,17 @@ class CADLayers:
     strike_lower_win: str = "STRIKE_LOWER_WIN"
     strike_upper_win: str = "STRIKE_UPPER_WIN"
 
+    strike_upper_in: str = "STRIKE_U_IN"
+    strike_lower_in: str = "STRIKE_L_IN"
+    strike_upper_out: str = "STRIKE_U_OUT"
+    strike_lower_out: str = "STRIKE_L_OUT"
+
+    # --- Separatrix leg corridor windows ---
+    # These are not strike targets. They indicate where the divertor legs
+    # should pass, e.g. through the PF4-PF5 corridor rather than PF5-PF6.
+    leg_lower_win: str = "LEG_LOWER_WIN"
+    leg_upper_win: str = "LEG_UPPER_WIN"
+
 @dataclass(frozen=True)
 class CADImportOptions:
     # If unit_scale is None, infer from $INSUNITS. Example: mm -> 1e-3.
@@ -1346,6 +1357,17 @@ def load_geom_from_dxf(
         stL  = _load_marker(layers.strike_lower_win)
         stU  = _load_marker(layers.strike_upper_win)
 
+        strikeUI = _load_marker(layers.strike_upper_in)
+        strikeLI = _load_marker(layers.strike_lower_in)
+        strikeUO = _load_marker(layers.strike_upper_out)
+        strikeLO = _load_marker(layers.strike_lower_out)
+
+
+        # New: desired separatrix-leg corridor windows.
+        # These are meant to guide where the upper/lower divertor legs should pass.
+        legL = _load_marker(layers.leg_lower_win)
+        legU = _load_marker(layers.leg_upper_win)
+
         if xptL is not None:
             markers["xpt_lower"] = xptL
         if xptU is not None:
@@ -1355,6 +1377,20 @@ def load_geom_from_dxf(
         if stU is not None:
             markers["strike_upper"] = stU
 
+        if strikeLI is not None:
+            markers["STRIKE_L_IN"] = strikeLI
+        if strikeUI is not None:
+            markers["STRIKE_U_IN"] = strikeUI
+        if strikeLO is not None:
+            markers["STRIKE_L_OUT"] = strikeLO
+        if strikeUO is not None:
+            markers["STRIKE_U_OUT"] = strikeUO
+
+        if legL is not None:
+            markers["leg_lower"] = legL
+        if legU is not None:
+            markers["leg_upper"] = legU
+
         if markers:
             geom_markers_meta = {
                 "found": sorted(list(markers.keys())),
@@ -1363,10 +1399,33 @@ def load_geom_from_dxf(
                     "xpt_upper": layers.xpt_upper_win,
                     "strike_lower": layers.strike_lower_win,
                     "strike_upper": layers.strike_upper_win,
+                    "leg_lower": layers.leg_lower_win,
+                    "leg_upper": layers.leg_upper_win,
+
+                    "STRIKE_U_IN": layers.strike_upper_in,
+                    "STRIKE_L_IN": layers.strike_lower_in,
+                    "STRIKE_U_OUT": layers.strike_upper_out,
+                    "STRIKE_L_OUT": layers.strike_lower_out,
+
                 }
             }
         else:
-            geom_markers_meta = {"found": [], "layers": {}}
+            geom_markers_meta = {
+                "found": [],
+                "layers": {
+                    "xpt_lower": layers.xpt_lower_win,
+                    "xpt_upper": layers.xpt_upper_win,
+                    "strike_lower": layers.strike_lower_win,
+                    "strike_upper": layers.strike_upper_win,
+                    "leg_lower": layers.leg_lower_win,
+                    "leg_upper": layers.leg_upper_win,
+
+                    "STRIKE_U_IN": layers.strike_upper_in,
+                    "STRIKE_L_IN": layers.strike_lower_in,
+                    "STRIKE_U_OUT": layers.strike_upper_out,
+                    "STRIKE_L_OUT": layers.strike_lower_out,
+                }
+            }
 
     # ---- Coils (active)
     coils: Dict[str, Tuple[float, float, float, float]] = {}
