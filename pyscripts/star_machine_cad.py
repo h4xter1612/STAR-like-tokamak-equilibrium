@@ -212,6 +212,37 @@ class CADImportOptions:
     coil_nR_max: int = 8
     coil_nZ_max: int = 48
 
+    # -------------------------
+    # Optional effective CS segmentation
+    # -------------------------
+    # Experimental model:
+    #   CS_MID = central part of the CS
+    #   CS_END = upper + lower ends of the CS, kept symmetric
+    #
+    # This does not modify the CAD. It only creates additional current-control
+    # groups after the CS has been discretized into filaments.
+    cs_segmented: bool = True
+
+    # Fraction of the full CS height assigned to CS_MID.
+    # Example:
+    #   0.45 means central 45% of the full CS height is CS_MID,
+    #   and the remaining 55% is CS_END, split between top and bottom.
+    cs_mid_fraction: float = 0.45
+
+    # Optional absolute Z cutoff [m].
+    # If None, the code computes:
+    #   zcut = cs_mid_fraction * max(abs(Z_center) + dZ)
+    cs_segment_zcut_m: Optional[float] = None
+
+    # Keep the original CS group for backward compatibility.
+    # If True:
+    #   coil_groups contains CS, CS_MID, CS_END.
+    # If False:
+    #   coil_groups contains only CS_MID, CS_END for the CS.
+    #
+    # I recommend True for now so old scripts using "CS" still work.
+    cs_segment_keep_parent: bool = True
+
 
 # -----------------------------
 # Helpers
@@ -850,6 +881,160 @@ def _generate_blanket_centers(
 
     raise ValueError("Could not generate enough blanket filament centers; check walls/margin/filament size.")
 
+
+def _coil_rect_area_from_pack(pack: Tuple[float, float, float, float]) -> float:
+    """
+    Area proxy for a rectangular coil/subcoil pack.
+
+    pack = (Rc, Zc, dR, dZ)
+    where dR and dZ are half-width and half-height.
+    """
+    _, _, dR, dZ = pack
+    return max(0.0, 4.0 * float(dR) * float(dZ))
+
+
+def _normalized_area_weights_for_labels(
+    coils: Dict[str, Tuple[float, float, float, float]],
+    labels: List[str],
+) -> Dict[str, float]:
+    """
+    Build normalized area weights for a list of coil labels.
+
+    The weights satisfy:
+        sum(weights.values()) = 1.0
+
+    This is used so a group current, e.g. CS_MID_current, is distributed
+    across the filaments belonging to that group.
+    """
+    labels = [_normalize_label(x) for x in labels]
+
+    areas = {}
+    for lab in labels:
+        if lab not in coils:
+            continue
+        areas[lab] = _coil_rect_area_from_pack(coils[lab])
+
+    total = float(sum(areas.values()))
+
+    if total <= 0.0:
+        if len(labels) == 0:
+            return {}
+        w = 1.0 / float(len(labels))
+        return {lab: w for lab in labels if lab in coils}
+
+    return {lab: area / total for lab, area in areas.items()}
+
+
+def _add_segmented_cs_groups_to_geom(
+    geom: Dict,
+    opts: CADImportOptions,
+) -> None:
+    """
+    Add effective segmented-CS current-control groups to geom.
+
+    This does not change the CAD geometry and does not create new coils.
+    It only partitions the already-discretized CS filaments into:
+
+        CS_MID : central part of the CS around Z = 0
+        CS_END : upper + lower ends of the CS, kept symmetric
+
+    Recommended initial partition:
+        cs_mid_fraction = 0.45
+
+    Meaning:
+        central 45% of the full CS height -> CS_MID
+        remaining 55% -> CS_END
+    """
+    if not bool(getattr(opts, "cs_segmented", False)):
+        return
+
+    coils = geom.get("coils", {})
+    if not coils:
+        return
+
+    coil_groups = geom.setdefault("coil_groups", {})
+    coil_group_weights = geom.setdefault("coil_group_weights", {})
+
+    # Prefer existing CS group if already built.
+    cs_labels = list(coil_groups.get("CS", []))
+
+    # Fallback: detect CS filaments from labels.
+    if not cs_labels:
+        cs_labels = [
+            _normalize_label(k)
+            for k in coils.keys()
+            if _coil_family(k) == "CS"
+        ]
+
+    cs_labels = [_normalize_label(x) for x in cs_labels]
+
+    if not cs_labels:
+        raise ValueError(
+            "cs_segmented=True was requested, but no CS filaments were found."
+        )
+
+    # Estimate full CS half-height using filament extents.
+    z_extent = 0.0
+    for lab in cs_labels:
+        Rc, Zc, dR, dZ = coils[lab]
+        z_extent = max(z_extent, abs(float(Zc)) + abs(float(dZ)))
+
+    if z_extent <= 0.0:
+        raise ValueError(
+            "Could not determine CS vertical extent for segmented-CS model."
+        )
+
+    zcut_abs = getattr(opts, "cs_segment_zcut_m", None)
+
+    if zcut_abs is None:
+        mid_frac = float(getattr(opts, "cs_mid_fraction", 0.45))
+        mid_frac = max(0.05, min(mid_frac, 0.95))
+        zcut = mid_frac * z_extent
+    else:
+        zcut = abs(float(zcut_abs))
+
+    cs_mid = []
+    cs_end = []
+
+    for lab in cs_labels:
+        Rc, Zc, dR, dZ = coils[lab]
+        if abs(float(Zc)) <= zcut:
+            cs_mid.append(lab)
+        else:
+            cs_end.append(lab)
+
+    if not cs_mid:
+        raise ValueError(
+            f"CS_MID group is empty. zcut={zcut:.4f} m is too small."
+        )
+
+    if not cs_end:
+        raise ValueError(
+            f"CS_END group is empty. zcut={zcut:.4f} m is too large."
+        )
+
+    # Optional: remove parent CS group if you want fully segmented control only.
+    # I recommend keeping it for backward compatibility.
+    keep_parent = bool(getattr(opts, "cs_segment_keep_parent", True))
+    if not keep_parent:
+        coil_groups.pop("CS", None)
+        coil_group_weights.pop("CS", None)
+
+    coil_groups["CS_MID"] = list(cs_mid)
+    coil_groups["CS_END"] = list(cs_end)
+
+    coil_group_weights["CS_MID"] = _normalized_area_weights_for_labels(coils, cs_mid)
+    coil_group_weights["CS_END"] = _normalized_area_weights_for_labels(coils, cs_end)
+
+    geom["cs_segment_info"] = {
+        "enabled": True,
+        "z_extent_m": float(z_extent),
+        "zcut_m": float(zcut),
+        "mid_fraction_effective": float(zcut / z_extent),
+        "n_mid": int(len(cs_mid)),
+        "n_end": int(len(cs_end)),
+        "keep_parent": bool(keep_parent),
+    }
 
 def _build_blanket_filaments(
     outer_xy_closed: np.ndarray,
@@ -1779,6 +1964,8 @@ def load_geom_from_dxf(
         ),
     }
 
+    _add_segmented_cs_groups_to_geom(geom, opts)
+
     # Attach marker windows (if any)
     if markers:
         # Store as numpy arrays (consistent with rest of geom)
@@ -2153,8 +2340,8 @@ def plot_cad_geometry(geom: Dict, show: bool = True, ax=None):
     for name, (Rc, Zc, dR, dZ) in geom["coils"].items():
         x0, x1 = Rc - dR, Rc + dR
         y0, y1 = Zc - dZ, Zc + dZ
-        ax.plot([x0, x1, x1, x0, x0], [y0, y0, y1, y1, y0], "k-", lw=1)
-        ax.text(Rc, Zc, _normalize_label(name), ha="center", va="center", fontsize=8)
+        ax.plot([x0, x1, x1, x0, x0], [y0, y0, y1, y1, y0], "k-", lw=0.3)
+        # ax.text(Rc, Zc, _normalize_label(name), ha="center", va="center", fontsize=8)
 
     # --- NEW: marker windows visualization ---
     if "marker_windows" in geom and isinstance(geom["marker_windows"], dict):
@@ -2172,7 +2359,7 @@ def plot_cad_geometry(geom: Dict, show: bool = True, ax=None):
     ax.set_xlabel("R [m]")
     ax.set_ylabel("Z [m]")
     ax.grid(True)
-    ax.legend(loc="upper left")
+    # ax.legend(loc="upper left")
 
     if show:
         # tight_layout can warn with side text axes; it's safe. If you want, replace with subplots_adjust.

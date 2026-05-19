@@ -1,0 +1,101 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20260514010546
+Username: H4XTER\conej
+RunAs User: H4XTER\conej
+Configuration Name: 
+Machine: H4XTER (Microsoft Windows NT 10.0.26200.0)
+Host Application: C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
+Process ID: 10592
+PSVersion: 5.1.26100.8457
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.8457
+BuildVersion: 10.0.26100.8457
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+Transcript started, output file is .\results\new_coils_first_log.txt
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\fit_simplified_dn_dshape_first.py --target .\results\targets\star_simplified_dn_target.json --seed .\results\dshape_first_B_soft_aggressive_best.json --stage release-cs --iters 15 --pop 24 --workers 10 --timeout 180 --widen 0.030 --sigma-frac 0.045 --free-keys PF1,PF2,PF3,PF4,PF5,PF6 --no-early-stop --dxf .\star_baseline.dxf --dshape-weight 0.55 --inboard-weight 55 --target-rms-weight 18 --delta-weight 25 --delta-target 0.44 --kappa-min 2.00 --A-min 1.60 --chamfer-max-m 0.34
+[INFO] workers=10 iters=15 pop=24 timeout=180.0s seed=11
+[INFO] physics={'Ip_A': 4000000.0, 'paxis_Pa': 2000.0, 'fvac': 20.8, 'alpha_m': 1.5, 'alpha_n': 1.1}
+[INFO] initial currents [MA]: CS=-4.500, PF1=-1.551, PF2=-3.240, PF3=+1.678, PF4=+6.660, PF5=+4.864, PF6=+12.125
+
+[SEED] evaluating baseline...
+[SEED] score=1e+18 sep=False nxp=0 A=nan k=nan d=nan CS=-4.500 MA
+[ITER 001] batch_best=479.978 global_best=479.978 IMPROVED | ok=10/24 sep=3/24 | A=1.553 k=1.919 d=0.360 Rax=3.958 CS=-4.500 MA | 374.8s
+[ITER 002] batch_best=414.86 global_best=414.86 IMPROVED | ok=23/24 sep=20/24 | A=1.585 k=1.951 d=0.361 Rax=4.074 CS=-4.500 MA | 202.0s
+[ITER 003] batch_best=414.814 global_best=414.814 IMPROVED | ok=17/24 sep=13/24 | A=1.585 k=1.951 d=0.361 Rax=4.074 CS=-4.500 MA | 241.2s
+[ITER 004] batch_best=389.665 global_best=389.665 IMPROVED | ok=18/24 sep=12/24 | A=1.597 k=1.977 d=0.379 Rax=4.074 CS=-4.500 MA | 253.2s
+[ITER 005] batch_best=399.645 global_best=389.665          | ok=16/24 sep=7/24 | A=1.597 k=1.977 d=0.379 Rax=4.074 CS=-4.500 MA | 361.0s
+[ITER 006] batch_best=432.496 global_best=389.665          | ok=12/24 sep=8/24 | A=1.597 k=1.977 d=0.379 Rax=4.074 CS=-4.500 MA | 360.9s
+[ITER 007] batch_best=437.275 global_best=389.665          | ok=15/24 sep=6/24 | A=1.597 k=1.977 d=0.379 Rax=4.074 CS=-4.500 MA | 361.0s
+[ITER 008] batch_best=400.449 global_best=389.665          | ok=24/24 sep=13/24 | A=1.597 k=1.977 d=0.379 Rax=4.074 CS=-4.500 MA | 198.0s
+[ITER 009] batch_best=462.313 global_best=389.665          | ok=17/24 sep=9/24 | A=1.597 k=1.977 d=0.379 Rax=4.074 CS=-4.500 MA | 357.1s
+[ITER 010] batch_best=389.617 global_best=389.617 IMPROVED | ok=15/24 sep=8/24 | A=1.597 k=1.976 d=0.379 Rax=4.074 CS=-4.500 MA | 360.9s
+[ITER 011] batch_best=440.566 global_best=389.617          | ok=17/24 sep=11/24 | A=1.597 k=1.976 d=0.379 Rax=4.074 CS=-4.500 MA | 277.2s
+[ITER 012] batch_best=411.604 global_best=389.617          | ok=18/24 sep=12/24 | A=1.597 k=1.976 d=0.379 Rax=4.074 CS=-4.500 MA | 231.8s
+[ITER 013] batch_best=434.344 global_best=389.617          | ok=16/24 sep=8/24 | A=1.597 k=1.976 d=0.379 Rax=4.074 CS=-4.500 MA | 337.9s
+[ITER 014] batch_best=437.892 global_best=389.617          | ok=15/24 sep=8/24 | A=1.597 k=1.976 d=0.379 Rax=4.074 CS=-4.500 MA | 324.7s
+[ITER 015] batch_best=394.805 global_best=389.617          | ok=18/24 sep=12/24 | A=1.597 k=1.976 d=0.379 Rax=4.074 CS=-4.500 MA | 295.1s
+
+[OK] finished
+[OK] best score: 389.617
+[OK] best currents [MA]: CS=-4.500, PF1=-1.507, PF2=-3.279, PF3=+1.658, PF4=+6.410, PF5=+4.648, PF6=+11.486
+[OK] best json: C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts\results\fit_simplified_dn_toposafe_best.json
+[OK] run json : C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts\results\fit_simplified_dn_toposafe_run_20260514
+_010547.json
+[OK] log jsonl: C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts\results\fit_simplified_dn_toposafe_results.json
+l
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) Copy-Item .\results\fit_simplified_dn_toposafe_best.json .\results\disc_dshape_rebaseline_cs_fixed_best.json
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\plot_fit_best_case.py --fit-json .\results\disc_dshape_rebaseline_cs_fixed_best.json --target-json .\results\targets\star_simplified_dn_target.json --dxf .\star_baseline.dxf --save .\results\disc_dshape_rebaseline_cs_fixed.png
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\fit_simplified_dn_dshape_first.py --target .\results\targets\star_simplified_dn_target.json --seed .\results\disc_dshape_rebaseline_cs_fixed_best.json --stage release-cs --iters 15 --pop 28 --workers 10 --timeout 180 --widen 0.018 --sigma-frac 0.030 --free-keys PF1,PF2,PF3,PF4,PF5,PF6 --no-early-stop --dxf .\star_baseline.dxf --dshape-weight 0.65 --inboard-weight 60 --target-rms-weight 18 --delta-weight 28 --delta-target 0.45 --kappa-min 2.02 --A-min 1.62 --chamfer-max-m 0.33
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) Copy-Item .\results\fit_simplified_dn_toposafe_best.json .\results\disc_dshape_refine_local_best.json
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\plot_fit_best_case.py --fit-json .\results\disc_dshape_refine_local_best.json --target-json .\results\targets\star_simplified_dn_target.json --dxf .\star_baseline.dxf --save .\results\disc_dshape_refine_local.png
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\make_cs_branch_seeds.py --base .\results\disc_dshape_refine_local_best.json --out-dir .\results\seeds --cs-list="-4.0,-4.5,-5.0,-5.5" --tag disc_dshape_cs_scan
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\fit_simplified_dn_dshape_first.py --target .\results\targets\star_simplified_dn_target.json --seed .\results\seeds\disc_dshape_cs_scan_CS_m5p0MA.json --stage release-cs --iters 15 --pop 24 --workers 10 --timeout 180 --widen 0.022 --sigma-frac 0.035 --free-keys PF1,PF2,PF3,PF4,PF5,PF6 --no-early-stop --dxf .\star_baseline.dxf --dshape-weight 0.55 --inboard-weight 55 --target-rms-weight 16 --delta-weight 25 --delta-target 0.44 --kappa-min 2.00 --A-min 1.60 --chamfer-max-m 0.34
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) Copy-Item .\results\fit_simplified_dn_toposafe_best.json .\results\disc_dshape_cs_m5p0_best.json
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\plot_fit_best_case.py --fit-json .\results\disc_dshape_cs_m5p0_best.json --target-json .\results\targets\star_simplified_dn_target.json --dxf .\star_baseline.dxf --save .\results\disc_dshape_cs_m5p0.png
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\fit_simplified_dn_dshape_first.py --target .\results\targets\star_simplified_dn_target.json --seed .\results\seeds\disc_dshape_cs_scan_CS_m4p0MA.json --stage release-cs --iters 15 --pop 24 --workers 10 --timeout 180 --widen 0.022 --sigma-frac 0.035 --free-keys PF1,PF2,PF3,PF4,PF5,PF6 --no-early-stop --dxf .\star_baseline.dxf --dshape-weight 0.55 --inboard-weight 55 --target-rms-weight 16 --delta-weight 25 --delta-target 0.44 --kappa-min 2.00 --A-min 1.60 --chamfer-max-m 0.34
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) Copy-Item .\results\fit_simplified_dn_toposafe_best.json .\results\disc_dshape_cs_m4p0_best.json
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\plot_fit_best_case.py --fit-json .\results\disc_dshape_cs_m4p0_best.json --target-json .\results\targets\star_simplified_dn_target.json --dxf .\star_baseline.dxf --save .\results\disc_dshape_cs_m4p0.png
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) Stop-Transcript
+**********************
+Windows PowerShell transcript end
+End time: 20260514062534
+**********************

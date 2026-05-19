@@ -419,14 +419,14 @@ def plot_case(
                     lw=0.8,
                     alpha=0.8,
                 )
-                ax.text(
-                    Rc,
-                    Zc,
-                    str(name).upper(),
-                    ha="center",
-                    va="center",
-                    fontsize=7,
-                )
+                # ax.text(
+                #     Rc,
+                #     Zc,
+                #     str(name).upper(),
+                #     ha="center",
+                #     va="center",
+                #     fontsize=7,
+                # )
             except Exception:
                 pass
 

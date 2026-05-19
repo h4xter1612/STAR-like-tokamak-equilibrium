@@ -60,7 +60,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 
-FAMILIES_ALL = ("CS", "PF1", "PF2", "PF3", "PF4", "PF5", "PF6")
+FAMILIES_ALL = ("CS", "CS_MID", "CS_END", "PF1", "PF2", "PF3", "PF4", "PF5", "PF6")
 
 
 # ---------------------------------------------------------------------
@@ -283,6 +283,8 @@ def _target_current_limits(target: Dict[str, Any]) -> Tuple[Dict[str, float], Di
 
     default_imax = {
         "CS": 73.036e6,
+        "CS_MID": 73.036e6,
+        "CS_END": 73.036e6,
         "PF1": 15.000e6,
         "PF2": 15.000e6,
         "PF3": 7.500e6,
@@ -823,13 +825,18 @@ def _stage_free_fixed(stage: str) -> Tuple[List[str], List[str]]:
 
     if stage == "pf-only":
         free = ["PF2", "PF3", "PF4", "PF5", "PF6"]
-        fixed = ["CS", "PF1"]
+        fixed = ["CS", "CS_MID", "CS_END", "PF1"]
+
     elif stage == "pf1-pf":
         free = ["PF1", "PF2", "PF3", "PF4", "PF5", "PF6"]
-        fixed = ["CS"]
+        fixed = ["CS", "CS_MID", "CS_END"]
+
     elif stage == "release-cs":
+        # Legacy mode: release parent CS.
+        # If you pass --free-keys manually, this will be overridden.
         free = ["CS", "PF1", "PF2", "PF3", "PF4", "PF5", "PF6"]
-        fixed = []
+        fixed = ["CS_MID", "CS_END"]
+
     else:
         raise ValueError(f"Unknown stage: {stage}")
 

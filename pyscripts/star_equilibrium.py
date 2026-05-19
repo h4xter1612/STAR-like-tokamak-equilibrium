@@ -202,7 +202,7 @@ def apply_family_currents(tokamak: Any, totals_A: Dict[str, float], mode: str) -
         UL = str(lab).upper()
 
         # CS: soporta variantes típicas
-        if UL in ("CS", "CS1M", "CS1"):
+        if UL in ("CS", "CS_MID", "CS_END"):
             coil.current = float(totals_A.get("CS", 0.0))
 
         elif UL in ("PF1U", "PF1L"):
@@ -279,7 +279,7 @@ def print_group_currents_sanity(tokamak: Any, totals_A: Dict[str, float], mode: 
         return
 
     # NUEVO: incluye PF4–PF6
-    for fam in ("CS", "PF1", "PF2", "PF3", "PF4", "PF5", "PF6"):
+    for fam in ("CS", "CS_MID", "CS_END", "PF1", "PF2", "PF3", "PF4", "PF5", "PF6"):
         target = float(totals_A.get(fam, 0.0))
         labs = _get_group_labels(tokamak, fam)
         if not labs:
@@ -752,6 +752,8 @@ def build_equilibrium(
         # NUEVO: incluye PF4–PF6 (mantiene PF1–PF3 como baseline desde cfg)
         totals_A = {
             "CS":  float(f) * float(getattr(cfg, "CS_current", 0.0)),
+            "CS_MID":  float(f) * float(getattr(cfg, "CS_MID_current", 0.0)),
+            "CS_END":  float(f) * float(getattr(cfg, "CS_END_current", 0.0)),
             "PF1": float(f) * float(getattr(cfg, "PF1_current", 0.0)),
             "PF2": float(f) * float(getattr(cfg, "PF2_current", 0.0)),
             "PF3": float(f) * float(getattr(cfg, "PF3_current", 0.0)),
@@ -932,6 +934,23 @@ def plot_equilibrium(eq: Any, geom: Dict[str, Any], shape: Dict[str, Any], filen
 
 def main():
     eq, tokamak, geom, shape = build_equilibrium(verbose=True, redirect_solver_noise=True)
+    from separatrix_fallback_freegs import extract_freegs_psibndry_contours
+
+    fb = extract_freegs_psibndry_contours(
+        eq,
+        debug_plot=r".\results\debug_freegs_psibndry_contours.png",
+    )
+
+    print("\n--- FreeGS psi_bndry fallback ---")
+    print("ok      =", fb.get("ok"))
+    print("source  =", fb.get("source"))
+    print("reason  =", fb.get("reason"))
+    print("nseg    =", len(fb.get("segments", [])))
+    print("selected=", fb.get("selected_idx"))
+    print("closed  =", fb.get("selected_closed"))
+    print("axis_in =", fb.get("selected_contains_axis"))
+    print("edge    =", fb.get("selected_touches_domain_edge"))
+    print("plot    = .\\results\\debug_freegs_psibndry_contours.png")
     plot_equilibrium(eq, geom, shape, filename=str(getattr(cfg, "fig_equilibrium", "STAR_bean_equilibrium.png")))
 
 

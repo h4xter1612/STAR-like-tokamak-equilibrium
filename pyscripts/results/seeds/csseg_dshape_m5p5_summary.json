@@ -1,0 +1,108 @@
+{
+  "base": "results\\disc_dshape_cs_m5p5_refine_best.json",
+  "tag": "csseg_dshape_m5p5",
+  "base_total_cs_ma": -5.5,
+  "parent_cs_value": 0.0,
+  "generated": [
+    {
+      "path": "results\\seeds\\csseg_dshape_m5p5_total_m5p5MA_midfrac_0p45.json",
+      "mode": "share",
+      "total_cs_ma": -5.5,
+      "mid_share": 0.45,
+      "end_share": 0.55,
+      "CS": 0.0,
+      "CS_MID": -2.475,
+      "CS_END": -3.0250000000000004
+    },
+    {
+      "path": "results\\seeds\\csseg_dshape_m5p5_total_m5p5MA_midfrac_0p55.json",
+      "mode": "share",
+      "total_cs_ma": -5.5,
+      "mid_share": 0.55,
+      "end_share": 0.44999999999999996,
+      "CS": 0.0,
+      "CS_MID": -3.0250000000000004,
+      "CS_END": -2.4749999999999996
+    },
+    {
+      "path": "results\\seeds\\csseg_dshape_m5p5_total_m5p5MA_midfrac_0p65.json",
+      "mode": "share",
+      "total_cs_ma": -5.5,
+      "mid_share": 0.65,
+      "end_share": 0.35,
+      "CS": 0.0,
+      "CS_MID": -3.575,
+      "CS_END": -1.9249999999999998
+    },
+    {
+      "path": "results\\seeds\\csseg_dshape_m5p5_total_m5p5MA_midfrac_0p75.json",
+      "mode": "share",
+      "total_cs_ma": -5.5,
+      "mid_share": 0.75,
+      "end_share": 0.25,
+      "CS": 0.0,
+      "CS_MID": -4.125,
+      "CS_END": -1.375
+    },
+    {
+      "path": "results\\seeds\\csseg_dshape_m5p5_total_m5p5MA_midfrac_0p85.json",
+      "mode": "share",
+      "total_cs_ma": -5.5,
+      "mid_share": 0.85,
+      "end_share": 0.15000000000000002,
+      "CS": 0.0,
+      "CS_MID": -4.675,
+      "CS_END": -0.8250000000000002
+    },
+    {
+      "path": "results\\seeds\\csseg_dshape_m5p5_total_m6p325MA_midfrac_0p45.json",
+      "mode": "share",
+      "total_cs_ma": -6.324999999999999,
+      "mid_share": 0.45,
+      "end_share": 0.55,
+      "CS": 0.0,
+      "CS_MID": -2.84625,
+      "CS_END": -3.47875
+    },
+    {
+      "path": "results\\seeds\\csseg_dshape_m5p5_total_m6p325MA_midfrac_0p55.json",
+      "mode": "share",
+      "total_cs_ma": -6.324999999999999,
+      "mid_share": 0.55,
+      "end_share": 0.44999999999999996,
+      "CS": 0.0,
+      "CS_MID": -3.47875,
+      "CS_END": -2.8462499999999995
+    },
+    {
+      "path": "results\\seeds\\csseg_dshape_m5p5_total_m6p325MA_midfrac_0p65.json",
+      "mode": "share",
+      "total_cs_ma": -6.324999999999999,
+      "mid_share": 0.65,
+      "end_share": 0.35,
+      "CS": 0.0,
+      "CS_MID": -4.11125,
+      "CS_END": -2.2137499999999997
+    },
+    {
+      "path": "results\\seeds\\csseg_dshape_m5p5_total_m6p325MA_midfrac_0p75.json",
+      "mode": "share",
+      "total_cs_ma": -6.324999999999999,
+      "mid_share": 0.75,
+      "end_share": 0.25,
+      "CS": 0.0,
+      "CS_MID": -4.7437499999999995,
+      "CS_END": -1.5812499999999998
+    },
+    {
+      "path": "results\\seeds\\csseg_dshape_m5p5_total_m6p325MA_midfrac_0p85.json",
+      "mode": "share",
+      "total_cs_ma": -6.324999999999999,
+      "mid_share": 0.85,
+      "end_share": 0.15000000000000002,
+      "CS": 0.0,
+      "CS_MID": -5.376249999999999,
+      "CS_END": -0.94875
+    }
+  ]
+}
