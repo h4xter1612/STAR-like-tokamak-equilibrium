@@ -630,7 +630,6 @@ def print_plasma_diagnostics(diag: Dict[str, Any]) -> None:
     print(f"area     = {float(diag['area_m2']):.4f} m^2")
     print(f"bounds   = R[{float(diag['Rmin']):.4f},{float(diag['Rmax']):.4f}]  Z[{float(diag['Zmin']):.4f},{float(diag['Zmax']):.4f}]")
 
-
 # -------------------------
 # Main equilibrium build
 # -------------------------
@@ -936,22 +935,56 @@ def main():
     eq, tokamak, geom, shape = build_equilibrium(verbose=True, redirect_solver_noise=True)
     from separatrix_fallback_freegs import extract_freegs_psibndry_contours
 
-    fb = extract_freegs_psibndry_contours(
+    from separatrix_fallback_freegs import extract_freegs_dn_lcfs
+
+    # Quick check manual: cambia estos valores si tus X-points reales están ligeramente diferentes.
+    # Para el caso de tu figura parecen aprox:
+    xpoints_for_fallback = [
+        (3.0, 4.5),
+        (3.0, -4.5),
+    ]
+
+    fb = extract_freegs_dn_lcfs(
         eq,
-        debug_plot=r".\results\debug_freegs_psibndry_contours.png",
+        xpoints=xpoints_for_fallback,
+        debug_plot=r".\results\debug_freegs_dn_lcfs.png",
+        xpoint_tol=0.75,
     )
 
-    print("\n--- FreeGS psi_bndry fallback ---")
-    print("ok      =", fb.get("ok"))
-    print("source  =", fb.get("source"))
-    print("reason  =", fb.get("reason"))
-    print("nseg    =", len(fb.get("segments", [])))
-    print("selected=", fb.get("selected_idx"))
-    print("closed  =", fb.get("selected_closed"))
-    print("axis_in =", fb.get("selected_contains_axis"))
-    print("edge    =", fb.get("selected_touches_domain_edge"))
-    print("plot    = .\\results\\debug_freegs_psibndry_contours.png")
+    print("\n--- FreeGS DN fallback quick check ---")
+    print("ok        =", fb.get("ok"))
+    print("source    =", fb.get("source"))
+    print("reason    =", fb.get("reason"))
+    print("usable    =", fb.get("has_usable_sep"))
+    print("true      =", fb.get("has_true_sep"))
+    print("nseg      =", len(fb.get("segments", [])))
+    print("selected  =", fb.get("selected_idx"))
+    print("xpt_upper =", fb.get("xpt_upper_used"))
+    print("xpt_lower =", fb.get("xpt_lower_used"))
+    print("dn_failed =", fb.get("dn_reconstruction_failed"))
+    print("plot      = .\\results\\debug_freegs_dn_lcfs.png")
+
+    if fb.get("ok") and "R_sep" in fb and "Z_sep" in fb:
+        Rfb = np.asarray(fb["R_sep"])
+        Zfb = np.asarray(fb["Z_sep"])
+        print("R_sep range =", float(np.nanmin(Rfb)), float(np.nanmax(Rfb)))
+        print("Z_sep range =", float(np.nanmin(Zfb)), float(np.nanmax(Zfb)))
+        print("n R_sep     =", len(Rfb))    
+
     plot_equilibrium(eq, geom, shape, filename=str(getattr(cfg, "fig_equilibrium", "STAR_bean_equilibrium.png")))
+
+    print("\n--- DN fallback geometry ---")
+    geom = fb.get("geometry", {})
+    print("geom ok  =", geom.get("ok"))
+    print("R0       =", geom.get("R0"))
+    print("a        =", geom.get("a"))
+    print("A        =", geom.get("A"))
+    print("kappa    =", geom.get("kappa"))
+    print("delta_u  =", geom.get("delta_u"))
+    print("delta_l  =", geom.get("delta_l"))
+    print("delta_bar=", geom.get("delta_bar"))
+    print("area     =", geom.get("area"))
+    print("bounds   =", geom.get("bounds"))
 
 
 if __name__ == "__main__":

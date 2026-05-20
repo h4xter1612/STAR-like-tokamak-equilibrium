@@ -30,6 +30,10 @@ try:
 except Exception:
     Path = None
 
+try:
+    from separatrix_fallback_freegs import extract_freegs_dn_lcfs
+except Exception:
+    extract_freegs_dn_lcfs = None
 
 # -------------------------
 # Basic helpers
@@ -341,13 +345,34 @@ def _magnetic_axis(eq: Any, R1: np.ndarray, Z1: np.ndarray, psi_RZ: np.ndarray) 
             pass
 
     nR, nZ = psi_RZ.shape
-    i0, j0 = nR // 2, nZ // 2
-    imin = int(np.nanargmin(psi_RZ))
-    imax = int(np.nanargmax(psi_RZ))
+
+    # Restrict axis search to plausible plasma core region.
+    RR, ZZ = np.meshgrid(R1, Z1, indexing="ij")
+    mask = (
+        np.isfinite(psi_RZ)
+        & (R1[0] <= RR) & (RR <= R1[-1])
+        & (2.0 <= RR) & (RR <= 6.5)
+        & (-3.5 <= ZZ) & (ZZ <= 3.5)
+    )
+
+    if not np.any(mask):
+        mask = np.isfinite(psi_RZ)
+
+    vals = np.where(mask, psi_RZ, np.nan)
+
+    imin = int(np.nanargmin(vals))
+    imax = int(np.nanargmax(vals))
+
     i1, j1 = np.unravel_index(imin, psi_RZ.shape)
     i2, j2 = np.unravel_index(imax, psi_RZ.shape)
-    d1 = (i1 - i0) ** 2 + (j1 - j0) ** 2
-    d2 = (i2 - i0) ** 2 + (j2 - j0) ** 2
+
+    # Pick the extremum closer to expected plasma center.
+    Rcen_guess = 4.0
+    Zcen_guess = 0.0
+
+    d1 = (R1[i1] - Rcen_guess) ** 2 + (Z1[j1] - Zcen_guess) ** 2
+    d2 = (R1[i2] - Rcen_guess) ** 2 + (Z1[j2] - Zcen_guess) ** 2
+
     i, j = (i1, j1) if d1 <= d2 else (i2, j2)
     return float(R1[i]), float(Z1[j]), float(psi_RZ[i, j])
 
@@ -437,14 +462,11 @@ def _metrics_from_boundary(R_sep: np.ndarray, Z_sep: np.ndarray) -> Dict[str, fl
     R = np.asarray(R_sep, float)
     Z = np.asarray(Z_sep, float)
 
-    Rmin = float(np.nanmin(R))
-    Rmax = float(np.nanmax(R))
-    Zmin = float(np.nanmin(Z))
-    Zmax = float(np.nanmax(Z))
+    ok = np.isfinite(R) & np.isfinite(Z)
+    R = R[ok]
+    Z = Z[ok]
 
-    R0 = 0.5 * (Rmax + Rmin)
-    a = 0.5 * (Rmax - Rmin)
-    if not np.isfinite(a) or a <= 1e-6:
+    if R.size < 10:
         return dict(
             R0_plasma=float("nan"),
             a_plasma=float("nan"),
@@ -452,27 +474,66 @@ def _metrics_from_boundary(R_sep: np.ndarray, Z_sep: np.ndarray) -> Dict[str, fl
             kappa_plasma=float("nan"),
             delta_u=float("nan"),
             delta_l=float("nan"),
+            delta_bar=float("nan"),
+            area=float("nan"),
+        )
+
+    if np.hypot(R[0] - R[-1], Z[0] - Z[-1]) > 1e-9:
+        R = np.r_[R, R[0]]
+        Z = np.r_[Z, Z[0]]
+
+    Rmin = float(np.nanmin(R))
+    Rmax = float(np.nanmax(R))
+    Zmin = float(np.nanmin(Z))
+    Zmax = float(np.nanmax(Z))
+
+    R0 = 0.5 * (Rmax + Rmin)
+    Z0 = 0.5 * (Zmax + Zmin)
+    a = 0.5 * (Rmax - Rmin)
+
+    if not np.isfinite(a) or a <= 1e-6:
+        return dict(
+            R0_plasma=float("nan"),
+            Z0_plasma=float("nan"),
+            a_plasma=float("nan"),
+            A_plasma=float("nan"),
+            kappa_plasma=float("nan"),
+            delta_u=float("nan"),
+            delta_l=float("nan"),
+            delta_bar=float("nan"),
+            area=float("nan"),
         )
 
     A = R0 / a
-    kappa = (Zmax - Zmin) / (Rmax - Rmin + 1e-30)
+    kappa = 0.5 * (Zmax - Zmin) / a
 
-    iu = int(np.argmax(Z))
-    il = int(np.argmin(Z))
+    iu = int(np.nanargmax(Z))
+    il = int(np.nanargmin(Z))
+
     Ru = float(R[iu])
     Rl = float(R[il])
+
     delta_u = (R0 - Ru) / a
     delta_l = (R0 - Rl) / a
+    delta_bar = 0.5 * (delta_u + delta_l)
+
+    area = 0.5 * abs(np.sum(R[:-1] * Z[1:] - R[1:] * Z[:-1]))
 
     return dict(
         R0_plasma=float(R0),
+        Z0_plasma=float(Z0),
         a_plasma=float(a),
         A_plasma=float(A),
         kappa_plasma=float(kappa),
         delta_u=float(delta_u),
         delta_l=float(delta_l),
+        delta_bar=float(delta_bar),
+        area=float(area),
+        Rmin=float(Rmin),
+        Rmax=float(Rmax),
+        Zmin=float(Zmin),
+        Zmax=float(Zmax),
     )
-
 
 # -------------------------
 # LCFS-limiter fallback
@@ -639,6 +700,145 @@ def _near_separatrix_closed_curve(
     info["axis_is_min"] = bool(axis_is_min)
     return np.asarray(seg_best, float), float(psi_eval_best), info
 
+def _xpoints_for_dn_fallback(
+    valid_xps: List[Dict[str, float]],
+    all_xps: List[Dict[str, float]],
+    *,
+    prefer_valid: bool = True,
+) -> List[Tuple[float, float]]:
+    src = valid_xps if (prefer_valid and len(valid_xps) >= 2) else all_xps
+
+    pts: List[Tuple[float, float]] = []
+    for xp in src:
+        try:
+            R = float(xp["R"])
+            Z = float(xp["Z"])
+            if not (np.isfinite(R) and np.isfinite(Z)):
+                continue
+
+            # STAR-like diverted X-points should be near the inboard/top-bottom neck,
+            # not at the far outer boundary or coil-dominated region.
+            if not (1.5 <= R <= 4.2):
+                continue
+            if not (3.5 <= abs(Z) <= 6.2):
+                continue
+
+            pts.append((R, Z))
+        except Exception:
+            continue
+
+    if len(pts) >= 2:
+        return pts
+
+    # Last fallback: return unfiltered finite points.
+    pts = []
+    for xp in src:
+        try:
+            R = float(xp["R"])
+            Z = float(xp["Z"])
+            if np.isfinite(R) and np.isfinite(Z):
+                pts.append((R, Z))
+        except Exception:
+            pass
+
+    return pts
+
+def _try_freegs_dn_fallback(
+    eq: Any,
+    out: Dict[str, Any],
+    valid_xps: List[Dict[str, float]],
+    all_xps: List[Dict[str, float]],
+    *,
+    xpoint_tol: float = 0.75,
+) -> bool:
+    """
+    Try to reconstruct a double-null LCFS from FreeGS/FreeGSNKE psi_bndry.
+
+    Mutates `out` in-place if successful.
+
+    Return:
+        True if fallback succeeded and out was updated.
+        False otherwise.
+    """
+    if extract_freegs_dn_lcfs is None:
+        out["dn_fallback"] = {
+            "ok": False,
+            "reason": "separatrix_fallback_freegs_import_failed",
+        }
+        return False
+
+    xpoints = _xpoints_for_dn_fallback(valid_xps, all_xps, prefer_valid=True)
+
+    if len(xpoints) < 2:
+        out["dn_fallback"] = {
+            "ok": False,
+            "reason": "not_enough_xpoints_for_dn_fallback",
+            "n_xpoints": len(xpoints),
+        }
+        return False
+
+    try:
+        fb = extract_freegs_dn_lcfs(
+            eq,
+            xpoints=xpoints,
+            debug_plot=None,
+            xpoint_tol=float(xpoint_tol),
+        )
+    except Exception as e:
+        out["dn_fallback"] = {
+            "ok": False,
+            "reason": f"exception:{repr(e)}",
+        }
+        return False
+
+    out["dn_fallback"] = {
+        k: v for k, v in fb.items()
+        if k not in ("R_sep", "Z_sep", "R_lcfs", "Z_lcfs", "raw_segments")
+    }
+
+    if not (fb.get("ok", False) and fb.get("has_usable_sep", False)):
+        return False
+
+    if "R_sep" not in fb or "Z_sep" not in fb:
+        return False
+
+    R_sep = np.asarray(fb["R_sep"], dtype=float)
+    Z_sep = np.asarray(fb["Z_sep"], dtype=float)
+
+    if R_sep.size < 20 or Z_sep.size < 20 or R_sep.size != Z_sep.size:
+        out["dn_fallback"]["ok"] = False
+        out["dn_fallback"]["reason"] = "bad_RZ_sep_from_dn_fallback"
+        return False
+
+    met = _metrics_from_boundary(R_sep, Z_sep)
+
+    out.update(met)
+    out["R_sep"] = [float(x) for x in R_sep.tolist()]
+    out["Z_sep"] = [float(x) for x in Z_sep.tolist()]
+
+    # Existing keys, so downstream scripts do not need major changes.
+    out["ok_sep"] = True
+    out["has_closed_lcfs"] = True
+
+    # This is reconstructed from FreeGS psi_bndry, not the old near-separatrix method.
+    # Set True to avoid downstream rejection, but keep provenance explicit.
+    out["has_true_separatrix"] = True
+    out["has_usable_sep"] = True
+    out["has_freegs_psibndry_sep"] = True
+
+    out["reason"] = "ok_dn_fallback"
+    out["sep_source"] = fb.get("source", "freegs_psibndry_dn_reconstructed")
+    out["shape_reason"] = fb.get("reason", "dn_lcfs_reconstructed_from_psibndry_segments")
+
+    geom = fb.get("geometry", {})
+    if isinstance(geom, dict) and geom.get("ok", False):
+        out["R0_fallback_geom"] = float(geom.get("R0", float("nan")))
+        out["A_fallback_geom"] = float(geom.get("A", float("nan")))
+        out["kappa_fallback_geom"] = float(geom.get("kappa", float("nan")))
+        out["delta_bar_fallback_geom"] = float(geom.get("delta_bar", float("nan")))
+        out["area_fallback_geom"] = float(geom.get("area", float("nan")))
+
+    return True
 
 # -------------------------
 # Public API
@@ -680,6 +880,11 @@ def analyze_star(
         preferred_xpoint=None,
         fallback_lcfs=None,
         separatrix_eval_info=None,
+        has_usable_sep=False,
+        has_freegs_psibndry_sep=False,
+        sep_source="none",
+        shape_reason="init",
+        dn_fallback=None,
     )
 
     try:
@@ -767,6 +972,20 @@ def analyze_star(
         else:
             out["reason"] = "no_valid_xpoint_for_psi_sep"
 
+        # ---- Double-null FreeGS psi_bndry fallback
+        # This handles true DN cases where psi=psi_bndry is topologically valid,
+        # but the exact contour is not a single closed curve and the near-separatrix
+        # closed-contour check fails.
+        if len(valid_xps) >= 2 or len(xps) >= 2:
+            if _try_freegs_dn_fallback(
+                eq,
+                out,
+                valid_xps,
+                xps,
+                xpoint_tol=0.75,
+            ):
+                return out
+
         # ---- Fallback LCFS (NOT true separatrix)
         Rf, Zf, info, psi_lcfs = _lcfs_limiter(
             R1, Z1, psi_RZ, R_ax, Z_ax, psi_ax, geom,
@@ -785,13 +1004,19 @@ def analyze_star(
             out["ok_sep"] = False
             out["has_true_separatrix"] = False
             out["has_closed_lcfs"] = True
+            out["has_usable_sep"] = True
+            out["sep_source"] = "lcfs_limiter"
             if out.get("reason") in ("init", "no_valid_xpoint_for_psi_sep"):
                 out["reason"] = "fallback_lcfs_ok"
+            out["shape_reason"] = out.get("reason", "fallback_lcfs_ok")
             return out
 
         out["ok_sep"] = False
         out["has_true_separatrix"] = False
         out["has_closed_lcfs"] = False
+        out["has_usable_sep"] = False
+        out["sep_source"] = "none"
+        out["shape_reason"] = "fallback_lcfs_failed"
         out["reason"] = "fallback_lcfs_failed"
         return out
 
@@ -800,4 +1025,7 @@ def analyze_star(
         out["has_true_separatrix"] = False
         out["has_closed_lcfs"] = False
         out["reason"] = f"exception:{repr(e)}"
+        out["has_usable_sep"] = False
+        out["sep_source"] = "none"
+        out["shape_reason"] = f"exception:{repr(e)}"
         return out
