@@ -1,0 +1,762 @@
+\documentclass[11pt,a4paper]{article}
+
+% =========================================================
+%  STAR TOKAMAK MONOGRAPH SECTION -- DETAILED ENGINEERING VERSION
+% =========================================================
+
+% XeLaTeX
+\usepackage{fontspec}
+\setmainfont{TeX Gyre Termes}
+
+% Idioma
+\usepackage[spanish,es-nodecimaldot]{babel}
+
+% Márgenes
+\usepackage[margin=2.5cm]{geometry}
+
+% Matemáticas y símbolos
+\usepackage{amsmath,amssymb,bm}
+
+% Figuras y tablas
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{multirow}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{xcolor}
+
+% Hipervínculos
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+% Mejor espaciado en tablas
+\renewcommand{\arraystretch}{1.15}
+
+\begin{document}
+
+% =========================================================
+% SECCIÓN: STAR TOKAMAK
+% =========================================================
+
+\section{STAR Tokamak}
+\label{sec:star_tokamak}
+
+
+\subsection{Introducción al concepto STAR}
+El \emph{Spherical Tokamak Advanced Reactor} (STAR) es un concepto preconceptual de planta
+fusionada tipo tokamak esférico desarrollado con una filosofía distinta a la de muchos diseños
+puramente centrados en desempeño de plasma. En lugar de partir únicamente de una configuración
+magnética deseada y posteriormente adaptar la ingeniería alrededor de ella, STAR se plantea como
+una arquitectura integrada en la que la física del plasma, la disposición de bobinas, la segmentación
+del blanket, el acceso para mantenimiento, el costo de construcción y la disponibilidad operacional
+se consideran simultáneamente. Esta motivación es central para el presente trabajo, porque el
+equilibrio magnético no puede evaluarse de forma aislada: debe coexistir con una geometría de
+primera pared, blanket, estructuras pasivas y bobinas que respete restricciones reales de integración.
+
+Desde el punto de vista geométrico, STAR pertenece a la familia de tokamaks esféricos. Esto implica
+un aspect ratio bajo, típicamente alrededor de $A=R_0/a\approx 2$, y una sección poloidal más
+compacta, elongada y de alto shaping que la de un tokamak convencional de mayor aspect ratio. En
+el diseño de referencia, esta compacidad se explota como una posible vía para reducir tamaño de
+reactor, costo de capital y complejidad de componentes, sin renunciar a una configuración de plasma
+de alto desempeño. En consecuencia, la forma del plasma buscada en este proyecto no fue una
+sección circular ni una elipse simple, sino una configuración tipo D, con elongación elevada,
+triangularidad positiva y topología diverted.
+
+La arquitectura STAR también introduce restricciones de ingeniería particularmente importantes.
+El diseño de referencia considera una estrategia de mantenimiento vertical, una reducción del número
+de bobinas de campo toroidal a 12, sectores de blanket DCLL colapsables y una disposición pensada
+para mejorar disponibilidad y simplificar el reemplazo de componentes internos. En el contexto de
+esta monografía, estos elementos justifican la decisión de no tratar el dominio entre plasma y bobinas
+como un espacio vacío arbitrario. Por el contrario, la sección poloidal debe distinguir al menos cuatro
+entidades: bobinas activas PF/CS, primera pared o limiter, región de blanket y estructuras pasivas
+asociadas al vessel/soporte. Esta separación fue precisamente uno de los cambios que permitió que el
+modelo numérico adquiriera consistencia ingenieril.
+
+El objetivo de esta sección, por tanto, no es reproducir exhaustivamente el diseño reactor completo,
+sino construir una versión axisimétrica y computacionalmente manejable del problema de equilibrio
+que conserve las restricciones geométricas más relevantes. El modelo desarrollado parte de un CAD
+poloidal, identifica familias de bobinas, asigna estructuras pasivas, impone una frontera de plasma
+accesible y resuelve el equilibrio Grad--Shafranov free-boundary con FreeGSNKE. Bajo esta lectura,
+STAR no se usa solamente como inspiración geométrica, sino como un caso de estudio de diseño
+ingenieril: el equilibrio aceptable debe ser compatible con la forma del plasma, la arquitectura del
+blanket, la ubicación del central solenoid, las bobinas PF y los márgenes de corriente.
+
+\subsection{Propósito de esta sección}
+Esta sección presenta el desarrollo de un modelo de equilibrio free-boundary Grad--Shafranov
+para un tokamak esférico tipo STAR, con énfasis en el proceso de diseño ingenieril que llevó
+al equilibrio baseline actual. El objetivo no es únicamente mostrar una solución final, sino
+documentar de forma reproducible cómo se construyó la máquina numérica a partir de CAD,
+cómo se interpretaron las estructuras físicas de la sección poloidal, cómo se depuró la
+discretización de bobinas y cómo se integró el análisis de separatriz, X-points, contención,
+corrientes y perfiles magnéticos.
+
+A diferencia de iteraciones anteriores, el modelo actual ya no utiliza el plasma target del CAD
+como restricción dominante. La geometría del plasma finalmente obtenida se considera más
+adecuada para la configuración electromagnética actual que la curva objetivo inicial. Por ello,
+el presente reporte trata al antiguo plasma target como una referencia histórica útil para
+exploración, pero no como la definición final de éxito. El nuevo criterio de aceptación combina:
+
+\begin{itemize}
+    \item forma D físicamente plausible;
+    \item topología double-null;
+    \item LCFS confinada dentro de la primera pared;
+    \item legs de separatriz dirigidas hacia las regiones de divertor;
+    \item corrientes de bobinas dentro de límites ingenieriles razonables;
+    \item diagnósticos magnéticos y geométricos consistentes.
+\end{itemize}
+
+El equilibrio actual debe entenderse como un \emph{baseline geométrico de baja presión}. Ya
+proporciona una forma STAR-like defendible, pero todavía no representa el punto final del
+reactor a alta presión. La siguiente etapa será continuar esta rama en presión y recalcular
+los diagnósticos MHD asociados.
+
+\subsection{Resumen ejecutivo del resultado alcanzado}
+El resultado principal de esta etapa es un equilibrio double-null confinado, con forma D,
+aspect ratio cercano a 2, elongación mayor a 2 y triangularidad positiva cercana a 0.47. Los
+parámetros principales del baseline son:
+
+\begin{table}[htbp]
+\centering
+\caption{Resumen del equilibrio baseline actual.}
+\label{tab:baseline_summary_exec}
+\begin{tabular}{lc}
+\toprule
+\textbf{Magnitud} & \textbf{Valor} \\
+\midrule
+Corriente de plasma, $I_p$ & $4.0~\mathrm{MA}$ \\
+Presión central usada en el baseline, $p_{\mathrm{axis}}$ & $2.0\times 10^3~\mathrm{Pa}$ \\
+$R_{\mathrm{axis}}$ & $4.397~\mathrm{m}$ \\
+$Z_{\mathrm{axis}}$ & $\approx 0~\mathrm{m}$ \\
+$R_0$ & $4.208~\mathrm{m}$ \\
+$a$ & $2.076~\mathrm{m}$ \\
+$A=R_0/a$ & $2.028$ \\
+$\kappa$ & $2.163$ \\
+$\delta_u,\delta_l$ & $0.469,0.469$ \\
+Área poloidal & $27.47~\mathrm{m^2}$ \\
+Volumen toroidal aproximado & $726.27~\mathrm{m^3}$ \\
+Distancia mínima LCFS--\texttt{WALL\_INNER} & $9.78~\mathrm{cm}$ \\
+Topología & Double-null reconstruida \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El resultado es importante porque se obtuvo sin introducir bobinas de shaping ficticias fuera
+del coilset del CAD. La mejora decisiva no provino de aumentar artificialmente la complejidad
+del sistema de control, sino de corregir la interpretación geométrica de la máquina: el central
+solenoid fue reposicionado de acuerdo con el gap observado en el diseño de referencia, las
+paredes internas y externas se reinterpretaron como first wall y blanket back plate, y la capa
+\texttt{STAR\_VESSEL} se modeló como estructura pasiva.
+
+\subsection{Evolución del modelo y lecciones de las iteraciones fallidas}
+La primera etapa del proyecto consistió en construir una máquina STAR-like simplificada,
+resolver equilibrios axisimétricos y obtener configuraciones visualmente plausibles. Sin embargo,
+conforme se incorporó la geometría CAD realista, se hizo evidente que el problema era más
+restrictivo que un ajuste de parámetros geométricos. Tres dificultades dominaron las primeras
+iteraciones:
+
+\begin{enumerate}
+    \item \textbf{El plasma target original no era necesariamente alcanzable.} La curva objetivo
+    inicial era útil como guía, pero no estaba garantizado que correspondiera a una rama de
+    equilibrio compatible con la disposición realista de bobinas, paredes y divertores.
+
+    \item \textbf{La semántica de paredes y estructuras estaba mezclada.} En iteraciones tempranas,
+    \texttt{WALL\_INNER}, \texttt{WALL\_OUTER}, blanket y vessel se trataban de forma demasiado
+    simplificada. Esto permitía aceptar soluciones que en realidad no respetaban la región
+    accesible al plasma.
+
+    \item \textbf{La autoridad del central solenoid estaba mal representada.} El CS se encontraba
+    demasiado cercano a $R=0$ en el modelo inicial. Aun con corrientes elevadas, su contribución
+    al shaping no se comportaba como se esperaba. Después de corregir el gap radial, el CS empezó
+    a influir en la forma del plasma de manera mucho más física.
+\end{enumerate}
+
+Estas iteraciones no se consideran resultados finales, pero fueron necesarias para identificar
+el origen del problema. El desarrollo siguió una lógica de depuración ingenieril: cuando una
+optimización fallaba o producía formas espurias, se revisaba si el fallo provenía del solver,
+de la función objetivo, de la interpretación CAD, de la discretización de bobinas o de la
+clasificación de separatriz. Esta estrategia permitió separar problemas numéricos de problemas
+físicos de modelado.
+
+\begin{figure}[htbp]
+\centering
+\fbox{%
+\parbox{0.92\linewidth}{%
+\centering
+\textbf{[INSERTAR FIGURA]}\\[2mm]
+Comparación conceptual entre: (a) una geometría inicial simplificada o mal interpretada, (b)
+un equilibrio con inboard bulge o contención deficiente, y (c) el baseline actual después de
+corregir semántica CAD y posición del CS.%
+}}
+\caption{Evolución cualitativa del modelo desde las iteraciones exploratorias hasta el baseline actual.}
+\label{fig:star_model_evolution_placeholder}
+\end{figure}
+
+\subsection{Arquitectura computacional del pipeline}
+El pipeline final se organizó como una cadena modular:
+
+\[
+\mathrm{CAD}\rightarrow
+\mathrm{machine\ builder}\rightarrow
+\mathrm{equilibrium\ solver}\rightarrow
+\mathrm{topology\ analysis}\rightarrow
+\mathrm{diagnostics}\rightarrow
+\mathrm{documentation}.
+\]
+
+Cada módulo cumple una función específica, de modo que el modelo pueda depurarse por etapas.
+La separación de responsabilidades fue esencial para no confundir errores de lectura CAD con
+problemas de equilibrio o con fallos del post-proceso.
+
+\subsubsection{\texttt{star\_machine\_cad.py}: constructor de máquina desde CAD}
+El módulo \texttt{star\_machine\_cad.py} importa el DXF y produce una representación numérica de
+la máquina. Sus tareas principales son:
+
+\begin{itemize}
+    \item leer polilíneas y polígonos por capas CAD;
+    \item reconstruir paredes internas y externas;
+    \item extraer bobinas activas \texttt{COIL\_*};
+    \item discretizar bobinas en filamentos distribuidos espacialmente;
+    \item agrupar bobinas por familia física: \texttt{CS}, \texttt{CS\_MID}, \texttt{CS\_END},
+    \texttt{PF1}, \ldots, \texttt{PF6};
+    \item calcular pesos de distribución de corriente por área;
+    \item calcular límites de corriente recomendados por familia;
+    \item importar \texttt{STAR\_VESSEL} como estructuras pasivas;
+    \item guardar metadata de materiales, resistividad y semántica geométrica.
+\end{itemize}
+
+El cambio más importante respecto al modelo anterior fue desactivar el relleno artificial del
+blanket. Antes se generaban filamentos pasivos automáticos entre \texttt{WALL\_INNER} y
+\texttt{WALL\_OUTER}; esto era útil como aproximación temprana, pero podía introducir metal
+ficticio en regiones donde la geometría real del CAD ya estaba disponible. En el modelo actual,
+la estructura pasiva principal proviene de \texttt{STAR\_VESSEL}.
+
+\subsubsection{\texttt{star\_equilibrium.py}: equilibrio free-boundary}
+El módulo \texttt{star\_equilibrium.py} construye el objeto de máquina, aplica corrientes por
+familias y resuelve la ecuación de Grad--Shafranov con FreeGSNKE. La formulación usada en el
+baseline emplea un perfil tipo \texttt{ConstrainPaxisIp}, parametrizado por:
+
+\[
+\left\{p_{\mathrm{axis}}, I_p, f_{\mathrm{vac}}, \alpha_m, \alpha_n\right\}.
+\]
+
+Para el baseline actual se usó $I_p=4.0~\mathrm{MA}$, $p_{\mathrm{axis}}=2.0\times10^3~\mathrm{Pa}$
+y $f_{\mathrm{vac}}=20.8~\mathrm{T\,m}$. Estos valores no representan todavía el estado final de
+presión del reactor; se eligieron para construir una rama estable de baja presión y validar la
+geometría.
+
+La solución se obtiene mediante una rampa de continuation interna. En lugar de aplicar todas
+las corrientes de golpe, el solver escala progresivamente las corrientes con factores $f$ hasta
+llegar al estado final. Esta estrategia reduce fallos de convergencia y evita que el solver salte
+a ramas espurias durante las primeras iteraciones.
+
+\subsubsection{\texttt{analyze\_star.py}: reconstrucción de LCFS y topología}
+El módulo \texttt{analyze\_star.py} extrae la geometría del plasma y clasifica la topología.
+Durante el proyecto se descubrió que contornear exactamente en $\psi_x$ podía fallar cerca de
+los X-points, porque la separatriz es una curva singular. Por esta razón se implementó una
+estrategia de reconstrucción más robusta:
+
+\begin{enumerate}
+    \item localizar el eje magnético y los puntos críticos candidatos;
+    \item detectar X-points superiores e inferiores;
+    \item evaluar los segmentos de contorno asociados al nivel de separatriz;
+    \item reconstruir una curva LCFS cerrada o near-separatrix válida para métricas geométricas;
+    \item calcular $R_0$, $a$, $A$, $\kappa$, $\delta_u$, $\delta_l$, área, perímetro y bounds;
+    \item verificar contención respecto a \texttt{WALL\_INNER}.
+\end{enumerate}
+
+Esta reconstrucción fue particularmente importante para configuraciones double-null, donde
+los segmentos de separatriz pueden aparecer como ramas abiertas en el contorno exacto, pero
+la frontera cerrada del plasma se reconstruye de forma consistente a partir de los segmentos
+físicamente conectados.
+
+\subsubsection{\texttt{diagnose\_star\_equilibrium.py}: diagnósticos tipo paper}
+El script \texttt{diagnose\_star\_equilibrium.py} genera tablas y figuras para documentación.
+Produce, entre otros archivos, un resumen en JSON, tablas CSV y figuras de equilibrio,
+perfiles de campo magnético, perfil de presión, safety factor, mapa de corriente toroidal y
+utilización de bobinas.
+
+El propósito de este script es separar el cálculo del equilibrio de su análisis documental. De
+este modo, una misma solución puede diagnosticarse de forma reproducible y compararse contra
+otras ramas futuras cuando se continúe en presión.
+
+\begin{table}[htbp]
+\centering
+\caption{Resumen de módulos principales del pipeline.}
+\label{tab:pipeline_modules_detailed}
+\begin{tabularx}{\textwidth}{p{0.28\textwidth}X}
+\toprule
+\textbf{Módulo} & \textbf{Función dentro del pipeline} \\
+\midrule
+\texttt{star\_machine\_cad.py} & Importa el DXF, interpreta capas, discretiza bobinas activas y estructuras pasivas, calcula grupos y límites de corriente. \\
+\texttt{star\_equilibrium.py} & Construye el equilibrio free-boundary, aplica corrientes de bobinas, ejecuta continuation y produce plots base. \\
+\texttt{analyze\_star.py} & Reconstruye LCFS/separatriz, X-points, métricas geométricas y contención contra la first wall. \\
+\texttt{diagnose\_star\_equilibrium.py} & Genera diagnósticos tipo paper: geometría, perfiles magnéticos, presión, $q$, corrientes y tablas. \\
+\texttt{fit\_simplified\_dn\_*.py} & Scripts de optimización usados durante exploración. Actualmente se conservan como herramientas auxiliares, no como definición final del baseline. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Interpretación física de las capas CAD}
+La interpretación final del CAD quedó definida de la siguiente manera:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Capa CAD} & \textbf{Interpretación física/numerical} \\
+\midrule
+\texttt{COIL\_*} & Bobinas activas PF/CS \\
+\texttt{STAR\_VESSEL} & Estructura pasiva metálica de soporte/vessel \\
+\texttt{WALL\_INNER} & First wall / limiter / frontera accesible al plasma \\
+\texttt{WALL\_OUTER} & Frontera externa del blanket / back plate \\
+\texttt{PLASMA\_TARGET} & Referencia histórica, no objetivo final principal \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+La jerarquía geométrica resultante puede describirse como:
+
+\[
+\mathrm{PF/CS\ coils}\;\supset\;\mathrm{STAR\_VESSEL}\;\supset\;\mathrm{WALL\_OUTER}\;\supset\;\mathrm{WALL\_INNER}\;\supset\;\mathrm{plasma\ region}.
+\]
+
+En esta convención, \texttt{WALL\_INNER} es la frontera más importante para el análisis de
+plasma: si la LCFS sale de \texttt{WALL\_INNER}, el plasma invade la primera pared o el blanket,
+por lo que la solución debe considerarse físicamente inválida. \texttt{WALL\_OUTER} no define
+la región accesible al plasma; representa la frontera externa del blanket. \texttt{STAR\_VESSEL}
+se usa como estructura pasiva externa al blanket.
+
+\begin{figure}[htbp]
+\centering
+\fbox{%
+\parbox{0.92\linewidth}{%
+\centering
+\textbf{[INSERTAR FIGURA]}\\[2mm]
+Plot limpio del setup de máquina: bobinas activas por familia, \texttt{STAR\_VESSEL} en gris,
+\texttt{WALL\_OUTER} como frontera externa del blanket y \texttt{WALL\_INNER} como limiter.%
+}}
+\caption{Semántica final de las capas CAD usadas en el modelo numérico.}
+\label{fig:cad_semantics_final_placeholder}
+\end{figure}
+
+\subsection{Discretización de bobinas activas}
+Una fuente inicial de error fue que las bobinas del CAD se interpretaban de forma demasiado
+concentrada, parecida a corrientes puntuales o a un número insuficiente de centros de filamento.
+Esto era problemático porque el campo de una bobina extensa no debe representarse como una
+fuente puntual en su centro geométrico cuando el plasma está cerca de la bobina.
+
+El método corregido discretiza cada bobina rectangular o poligonal en una malla de filamentos.
+Cada filamento representa una fracción del área conductora y recibe una fracción proporcional
+de la corriente total de su familia. Para una familia $F$ con filamentos $i=1,\ldots,N_F$, se
+definió el peso:
+
+\[
+w_i = \frac{A_i}{\sum_{j=1}^{N_F} A_j},
+\]
+
+de modo que la corriente asignada a cada filamento sea:
+
+\[
+I_i = w_i I_F.
+\]
+
+Este procedimiento garantiza que:
+
+\[
+\sum_{i=1}^{N_F} I_i = I_F.
+\]
+
+El diagnóstico de discretización confirmó que no existían centros duplicados y que la distancia
+mínima entre centros era finita. En el modelo final se obtuvieron $602$ filamentos activos.
+Las familias activas fueron:
+
+\begin{table}[htbp]
+\centering
+\caption{Número de filamentos activos por familia en el modelo final.}
+\label{tab:active_filaments_by_family}
+\begin{tabular}{lc}
+\toprule
+\textbf{Familia} & \textbf{Número de filamentos} \\
+\midrule
+PF1 & 90 \\
+PF2 & 90 \\
+PF3 & 50 \\
+PF4 & 36 \\
+PF5 & 48 \\
+PF6 & 96 \\
+CS & 192 \\
+CS\_MID & 88 \\
+CS\_END & 104 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La segmentación \texttt{CS\_MID}/\texttt{CS\_END} no introduce bobinas externas nuevas; representa
+una descomposición del winding pack central para estudiar su contribución al shaping. En la
+interpretación final, la corriente total del CS debe analizarse tanto de forma global como por
+regiones locales del winding pack.
+
+\subsection{Estructuras pasivas y materiales}
+La capa \texttt{STAR\_VESSEL} se discretizó como estructura pasiva metálica. A diferencia de las
+bobinas activas, estos filamentos se inicializan con corriente cero y no se incluyen como
+familias de control. Su función principal en el modelo estático es documentar la geometría
+física de la máquina y preparar el pipeline para extensiones dinámicas o resistivas.
+
+El modelo usa las siguientes asignaciones de material como metadata ingenieril:
+
+\begin{table}[htbp]
+\centering
+\caption{Materiales y resistividades efectivas usadas como metadata del modelo.}
+\label{tab:materials_metadata}
+\begin{tabular}{lll}
+\toprule
+\textbf{Región} & \textbf{Material efectivo} & \textbf{Resistividad efectiva} \\
+\midrule
+\texttt{STAR\_VESSEL} & SS316L & $7.5\times10^{-7}~\Omega\,\mathrm{m}$ \\
+\texttt{WALL\_INNER} & EUROFER97/RAFM efectivo & $1.0\times10^{-6}~\Omega\,\mathrm{m}$ \\
+\texttt{WALL\_OUTER} & EUROFER97/RAFM efectivo & $1.0\times10^{-6}~\Omega\,\mathrm{m}$ \\
+Blanket & Región sólida prohibida para plasma & No modelada como conductor continuo en esta etapa \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Es importante aclarar que la resistividad no altera de forma directa el equilibrio estático en
+la corrida actual. La resistividad queda guardada como metadata para diagnósticos, documentación
+y posibles extensiones dinámicas donde las corrientes inducidas en pasivos sean relevantes.
+
+\subsection{Corrección del central solenoid y su impacto}
+La corrección geométrica más importante fue el reposicionamiento del central solenoid. En la
+interpretación previa, el CS estaba demasiado cercano al eje $R=0$. Esto generaba una respuesta
+anómala: al aumentar la corriente, el campo tendía a producir compresión radial global, pero no
+shaping efectivo de la LCFS.
+
+Al introducir el gap radial observado en el diseño de referencia, aproximadamente
+$0.3~\mathrm{m}$, el CS recuperó autoridad sobre la forma del plasma. Esta corrección fue decisiva
+para alcanzar simultáneamente $A\approx2$, $\kappa>2$ y $\delta\approx0.47$ sin recurrir a
+corrientes imposibles.
+
+El resultado sugiere que el problema principal no era la ausencia de grados de libertad, sino
+la posición geométrica de la fuente de campo. Una pequeña diferencia en la posición radial del
+winding pack central modificó de forma significativa la sensibilidad del equilibrio.
+
+\subsection{Corrientes del equilibrio baseline}
+Las corrientes usadas en el baseline se resumen en la Tabla~\ref{tab:baseline_currents}. Las
+corrientes se reportan por familia, comparadas con límites recomendados calculados a partir
+de área efectiva y densidad de corriente ingenieril.
+
+\begin{table}[htbp]
+\centering
+\caption{Corrientes y utilización de bobinas para el equilibrio baseline.}
+\label{tab:baseline_currents}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Familia} & \textbf{$I$ [MA]} & \textbf{$I_{\max}$ [MA]} & \textbf{Utilización [\%]} \\
+\midrule
+PF1 & $-0.388$ & $15.000$ & $2.59$ \\
+PF2 & $-4.374$ & $15.000$ & $29.16$ \\
+PF3 & $+1.283$ & $7.500$ & $17.11$ \\
+PF4 & $+1.572$ & $5.829$ & $26.97$ \\
+PF5 & $+3.753$ & $8.261$ & $45.43$ \\
+PF6 & $+6.474$ & $15.302$ & $42.31$ \\
+CS total & $-46.655$ & $71.789$ & $64.99$ \\
+CS\_MID & $-31.702$ & $32.903$ & $96.35$ \\
+CS\_END & $-14.953$ & $38.886$ & $38.45$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La interpretación de CS requiere cuidado. Si \texttt{CS\_MID} y \texttt{CS\_END} se consideran
+subregiones de un mismo winding pack, la utilización global del CS es aproximadamente $65\%$.
+Sin embargo, la región media local se encuentra cerca de su límite local calculado. En términos
+ingenieriles, esto significa que la solución no viola el límite global del CS, pero concentra una
+parte importante de la demanda de corriente en la zona media del winding pack.
+
+\subsection{Geometría del equilibrio baseline}
+La forma obtenida tiene una frontera LCFS cerrada dentro de la primera pared, con simetría
+up-down prácticamente exacta. Sus parámetros geométricos se muestran en la Tabla~\ref{tab:baseline_geometry_detailed}.
+
+\begin{table}[htbp]
+\centering
+\caption{Parámetros geométricos calculados a partir de la LCFS reconstruida.}
+\label{tab:baseline_geometry_detailed}
+\begin{tabular}{lc}
+\toprule
+\textbf{Magnitud} & \textbf{Valor} \\
+\midrule
+$R_{\mathrm{axis}}$ & $4.397~\mathrm{m}$ \\
+$Z_{\mathrm{axis}}$ & $\approx 0~\mathrm{m}$ \\
+$R_0$ & $4.208~\mathrm{m}$ \\
+$a$ & $2.076~\mathrm{m}$ \\
+$A=R_0/a$ & $2.028$ \\
+$\kappa$ & $2.163$ \\
+$\delta_u$ & $0.469$ \\
+$\delta_l$ & $0.469$ \\
+Área poloidal & $27.47~\mathrm{m^2}$ \\
+Volumen toroidal aproximado & $726.27~\mathrm{m^3}$ \\
+$R_{\min},R_{\max}$ & $2.133,6.284~\mathrm{m}$ \\
+$Z_{\min},Z_{\max}$ & $-4.489,4.490~\mathrm{m}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Las definiciones geométricas usadas son las convencionales:
+
+\[
+R_0 = \frac{R_{\max}+R_{\min}}{2}, \qquad
+ a = \frac{R_{\max}-R_{\min}}{2}, \qquad
+ A = \frac{R_0}{a}.
+\]
+
+La elongación se calcula como:
+
+\[
+\kappa = \frac{Z_{\max}-Z_{\min}}{2a}.
+\]
+
+La triangularidad superior e inferior se calculan usando el desplazamiento radial de los puntos
+superior e inferior de la LCFS respecto a $R_0$:
+
+\[
+\delta_u = \frac{R_0 - R_{Z_{\max}}}{a},\qquad
+\delta_l = \frac{R_0 - R_{Z_{\min}}}{a}.
+\]
+
+En el baseline, $\delta_u\approx\delta_l$, lo que confirma que la solución es prácticamente
+simétrica.
+
+\begin{figure}[htbp]
+\centering
+\fbox{%
+\parbox{0.92\linewidth}{%
+\centering
+\textbf{[INSERTAR FIGURA]}\\[2mm]
+Equilibrio baseline limpio: contornos de $\psi$, LCFS/separatriz, eje magnético, X-points,
+\texttt{WALL\_INNER}, \texttt{WALL\_OUTER} y estructuras pasivas con baja opacidad.%
+}}
+\caption{Equilibrio double-null baseline obtenido con la geometría CAD corregida.}
+\label{fig:baseline_equilibrium_clean_placeholder}
+\end{figure}
+
+\subsection{Contención y márgenes contra la primera pared}
+La LCFS reconstruida se evaluó contra \texttt{WALL\_INNER}, interpretada como first wall/limiter.
+El resultado fue:
+
+\begin{table}[htbp]
+\centering
+\caption{Métricas de contención del equilibrio baseline.}
+\label{tab:containment_metrics}
+\begin{tabular}{lc}
+\toprule
+\textbf{Métrica} & \textbf{Valor} \\
+\midrule
+LCFS dentro de \texttt{WALL\_INNER} & Verdadero \\
+Distancia mínima LCFS--\texttt{WALL\_INNER} & $0.0978~\mathrm{m}$ \\
+Punto de distancia mínima & $(R,Z)=(4.106,4.085)~\mathrm{m}$ \\
+LCFS dentro de \texttt{WALL\_OUTER} & Verdadero \\
+Distancia mínima LCFS--\texttt{WALL\_OUTER} & $0.398~\mathrm{m}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El margen mínimo de casi $10~\mathrm{cm}$ respecto a la primera pared es suficiente para
+considerar que el baseline no está simplemente raspando la frontera geométrica. En etapas
+posteriores, cuando se incremente presión, esta métrica será una de las primeras a monitorear,
+ya que el plasma puede inflarse y reducir rápidamente el margen.
+
+\subsection{Diagnósticos de campo magnético}
+Los campos magnéticos se calcularon a partir del flujo poloidal $\psi(R,Z)$ usando:
+
+\[
+B_R = -\frac{1}{R}\frac{\partial \psi}{\partial Z},\qquad
+B_Z = \frac{1}{R}\frac{\partial \psi}{\partial R},\qquad
+B_p = \sqrt{B_R^2+B_Z^2}.
+\]
+
+El campo toroidal se aproximó inicialmente como:
+
+\[
+B_\phi \approx \frac{f_{\mathrm{vac}}}{R}.
+\]
+
+Esta aproximación es adecuada para diagnóstico geométrico inicial, aunque en etapas posteriores
+puede reemplazarse por $F(\psi)/R$ si se desea representar explícitamente variaciones internas
+del perfil toroidal.
+
+Se generaron dos cortes 1D:
+
+\begin{enumerate}
+    \item \textbf{Midplane magnético}: $Z=Z_{\mathrm{axis}}$, barriendo $R$.
+    \item \textbf{Eje vertical del plasma}: $R=R_{\mathrm{axis}}$, barriendo $Z$.
+\end{enumerate}
+
+En el midplane, $B_R$ funciona como un check de simetría. Para un equilibrio up-down symmetric,
+$\partial\psi/\partial Z\approx0$ en $Z=Z_{\mathrm{axis}}$, de modo que $B_R$ debe ser cercano a
+cero. En el baseline, $B_R$ en el midplane aparece del orden de $10^{-6}~\mathrm{T}$ o menor,
+varias órdenes de magnitud por debajo de $B_Z$, $B_p$ y $B_\phi$. Este residuo se atribuye a
+interpolación continua y diferencias finitas, no a un campo radial físicamente relevante.
+
+En el corte vertical, $B_R$ ya no debe ser cero: cambia de signo al cruzar el midplane y muestra
+la estructura poloidal asociada a la elongación vertical del plasma. En contraste, $B_\phi$ se
+mantiene constante en ese corte porque $R=R_{\mathrm{axis}}$ es constante y se usa
+$f_{\mathrm{vac}}/R$.
+
+\begin{figure}[htbp]
+\centering
+\fbox{%
+\parbox{0.92\linewidth}{%
+\centering
+\textbf{[INSERTAR FIGURA]}\\[2mm]
+Perfiles de campo en el midplane: $B_R$, $B_Z$, $B_p$ y $B_\phi$ contra $R$. Deben incluir línea
+del eje magnético e intersecciones de LCFS con el midplane.%
+}}
+\caption{Perfiles magnéticos sobre el midplane magnético.}
+\label{fig:midplane_fields_placeholder}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\fbox{%
+\parbox{0.92\linewidth}{%
+\centering
+\textbf{[INSERTAR FIGURA]}\\[2mm]
+Perfiles de campo sobre el eje vertical: $B_R$, $B_Z$, $B_p$ y $B_\phi$ contra $Z$ para
+$R=R_{\mathrm{axis}}$.%
+}}
+\caption{Perfiles magnéticos sobre la línea vertical del eje magnético.}
+\label{fig:vertical_axis_fields_placeholder}
+\end{figure}
+
+\subsection{Perfil de presión y safety factor}
+El perfil de presión se obtiene directamente del perfil \texttt{ConstrainPaxisIp}. En el baseline,
+la presión cae suavemente desde $p_{\mathrm{axis}}=2.0\times10^3~\mathrm{Pa}$ hasta valores
+cercanos a cero en la frontera. Esta presión es baja comparada con metas reactor, pero es
+adecuada para validar la rama geométrica.
+
+El perfil de safety factor $q(\psi_N)$ se calculó sobre superficies de flujo normalizadas. El
+resultado crece hacia el borde, como se espera en una configuración tokamak. Los valores muy
+cercanos a $\psi_N=1$ deben interpretarse con cautela, ya que el cálculo de $q$ cerca de la
+separatriz puede ser numéricamente sensible.
+
+\begin{figure}[htbp]
+\centering
+\fbox{%
+\parbox{0.92\linewidth}{%
+\centering
+\textbf{[INSERTAR FIGURA]}\\[2mm]
+Perfil de presión $p(\psi_N)$ del baseline.%
+}}
+\caption{Perfil de presión normalizado del equilibrio baseline.}
+\label{fig:pressure_profile_placeholder}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\fbox{%
+\parbox{0.92\linewidth}{%
+\centering
+\textbf{[INSERTAR FIGURA]}\\[2mm]
+Perfil de safety factor $q(\psi_N)$ del baseline.%
+}}
+\caption{Perfil de safety factor del equilibrio baseline.}
+\label{fig:q_profile_placeholder}
+\end{figure}
+
+\subsection{Manejo de discrepancias internas de $\psi$}
+Durante el diagnóstico apareció el mensaje:
+
+\begin{verbatim}
+Discrepancy between psi_func and plasma_psi detected. psi_func has been re-set.
+\end{verbatim}
+
+Este mensaje no invalida el equilibrio. Indica que el interpolador interno de $\psi$ no coincidía
+exactamente con el arreglo de flujo actualizado, por lo que fue reseteado para recuperar
+consistencia. La validación se basa en que, después del reset, los diagnósticos geométricos,
+campos, contención y perfiles se calculan de manera coherente. Para verificar estabilidad, se
+puede repetir el diagnóstico sin cambiar corrientes; si las métricas principales permanecen
+iguales, el warning se considera una corrección interna del objeto de equilibrio.
+
+\subsection{Intentos descartados y su valor metodológico}
+Las etapas previas de optimización no se eliminan del historial del proyecto; se documentan
+como intentos exploratorios que permitieron identificar errores de modelado. Entre ellas se
+incluyen:
+
+\begin{itemize}
+    \item optimizaciones directas contra el plasma target CAD original;
+    \item refines locales que mejoraban el score pero no la topología;
+    \item pruebas con CS exagerado para forzar triangularidad;
+    \item segmentaciones adicionales del CS que solo modificaban el equilibrio a corrientes altas;
+    \item inverse runs que imponían null points sin resolver la factibilidad geométrica;
+    \item continuations en presión que preservaban convergencia numérica pero degradaban la forma.
+\end{itemize}
+
+El valor de estas pruebas fue mostrar que el problema no era simplemente de optimización. La
+clave estaba en corregir la definición física de la máquina y el posicionamiento del CS. Una vez
+hecho esto, apareció una rama de equilibrio mucho más natural.
+
+\subsection{Estado actual del diseño y próximos pasos}
+El modelo actual ya está en condiciones de avanzar desde exploración geométrica hacia
+continuación física. Antes de aumentar presión, se recomienda congelar este baseline como
+referencia y usarlo para comparar futuras ramas. La continuación en presión debe realizarse de
+forma gradual:
+
+\[
+2\times10^3\ \rightarrow\ 5\times10^3\ \rightarrow\ 10^4\ \rightarrow\ 2\times10^4\ \rightarrow\ 5\times10^4\ \rightarrow\ 10^5~\mathrm{Pa},
+\]
+
+monitoreando en cada paso:
+
+\begin{itemize}
+    \item contención contra \texttt{WALL\_INNER};
+    \item preservación de X-points y topología double-null;
+    \item variación de $A$, $\kappa$ y $\delta$;
+    \item utilización de corrientes por familia;
+    \item evolución de $q(\psi_N)$;
+    \item incremento de $\beta$ y energía almacenada cuando esos diagnósticos estén consolidados.
+\end{itemize}
+
+El baseline actual no debe sobreoptimizarse manualmente antes de la continuación. Ya cumple la
+función principal de esta etapa: demostrar que, con la geometría CAD corregida, el coilset puede
+sostener una forma STAR-like double-null confinada y cuantitativamente razonable.
+
+\subsection{Figuras recomendadas para la monografía}
+Para la versión final de la monografía se recomienda incluir las siguientes figuras:
+
+\begin{enumerate}
+    \item setup CAD actualizado con active coils, STAR\_VESSEL, WALL\_INNER y WALL\_OUTER;
+    \item equilibrio baseline limpio;
+    \item equilibrio baseline con anotaciones de $R_0$, $a$, X-points y LCFS;
+    \item perfiles de campo magnético en midplane;
+    \item perfiles de campo magnético sobre eje vertical;
+    \item perfil de presión;
+    \item perfil de safety factor;
+    \item utilización de corrientes de bobinas;
+    \item comparación breve entre un intento fallido representativo y el baseline actual.
+\end{enumerate}
+
+\begin{figure}[htbp]
+\centering
+\fbox{%
+\parbox{0.92\linewidth}{%
+\centering
+\textbf{[INSERTAR FIGURA]}\\[2mm]
+Resumen visual final sugerido: CAD setup, equilibrio baseline, perfiles magnéticos, $q(\psi_N)$,
+presión y utilización de bobinas.%
+}}
+\caption{Conjunto recomendado de resultados visuales para cerrar la sección del tokamak STAR.}
+\label{fig:final_results_panel_placeholder}
+\end{figure}
+
+\subsection{Conclusión temporal}
+La etapa actual transformó el proyecto de una exploración de formas idealizadas a un pipeline
+de diseño ingenieril basado en CAD. Se corrigió la discretización de bobinas, se separaron
+estructuras activas y pasivas, se reinterpretó \texttt{WALL\_INNER} como first wall, se eliminó
+el blanket pasivo artificial y se corrigió la posición radial del central solenoid. Con estas
+modificaciones se obtuvo un equilibrio double-null confinado con $A\approx2.03$, $\kappa\approx2.16$
+y $\delta\approx0.47$.
+
+El resultado actual no es todavía el equilibrio final de alta presión, pero sí constituye una
+base sólida y reproducible para la siguiente fase: continuation en presión, diagnóstico MHD más
+completo y comparación contra objetivos de desempeño reactor.
+
+\end{document}

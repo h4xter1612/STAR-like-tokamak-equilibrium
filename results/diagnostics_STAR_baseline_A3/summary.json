@@ -1,0 +1,134 @@
+{
+  "cad_semantics": {
+    "STAR_VESSEL": "passive_structural_vessel_support",
+    "WALL_INNER": "first_wall_limiter_plasma_boundary",
+    "WALL_OUTER": "blanket_outer_back_plate",
+    "active_coils": "COIL_* layers",
+    "legacy_blanket_fill_enabled": false,
+    "passive_structures_enabled": true
+  },
+  "coil_currents": [
+    {
+      "I_MA": -0.3881732195496077,
+      "Imax_MA": 15.0,
+      "family": "PF1",
+      "n_filaments": 90,
+      "utilization_percent": 2.5878214636640515
+    },
+    {
+      "I_MA": -4.37397425389883,
+      "Imax_MA": 15.0,
+      "family": "PF2",
+      "n_filaments": 90,
+      "utilization_percent": 29.159828359325534
+    },
+    {
+      "I_MA": 1.2828918782328247,
+      "Imax_MA": 7.5,
+      "family": "PF3",
+      "n_filaments": 50,
+      "utilization_percent": 17.10522504310433
+    },
+    {
+      "I_MA": 6.474193137884974,
+      "Imax_MA": 15.301782825856684,
+      "family": "PF6",
+      "n_filaments": 96,
+      "utilization_percent": 42.31005766821495
+    },
+    {
+      "I_MA": 3.7531419034757096,
+      "Imax_MA": 8.26068789527687,
+      "family": "PF5",
+      "n_filaments": 48,
+      "utilization_percent": 45.43376957288999
+    },
+    {
+      "I_MA": 1.5719446463585593,
+      "Imax_MA": 5.828793339133466,
+      "family": "PF4",
+      "n_filaments": 36,
+      "utilization_percent": 26.968611767461486
+    },
+    {
+      "I_MA": -46.65484580815737,
+      "Imax_MA": 71.78922938585265,
+      "family": "CS",
+      "n_filaments": 192,
+      "utilization_percent": 64.9886427355237
+    },
+    {
+      "I_MA": -31.70202215676788,
+      "Imax_MA": 32.90339680184914,
+      "family": "CS_MID",
+      "n_filaments": 88,
+      "utilization_percent": 96.34878230865895
+    },
+    {
+      "I_MA": -14.95282365138954,
+      "Imax_MA": 38.88583258400352,
+      "family": "CS_END",
+      "n_filaments": 104,
+      "utilization_percent": 38.45314001979396
+    }
+  ],
+  "containment": {
+    "closest_lcfs_point_R_m": 4.106183480126252,
+    "closest_lcfs_point_Z_m": 4.084728581821453,
+    "inside_WALL_INNER": true,
+    "inside_WALL_OUTER": true,
+    "min_abs_distance_to_WALL_INNER_m": 0.09779965252642793,
+    "min_abs_distance_to_WALL_OUTER_m": 0.39761782454241856
+  },
+  "field_diagnostic_note": "B_R on the magnetic midplane is a symmetry check and is expected to be near zero for an up-down symmetric equilibrium.",
+  "geometry": {
+    "A": 2.0275338068229156,
+    "R0_m": 4.208114147566894,
+    "R_axis_m": 4.396986663090998,
+    "R_bottom_m": 3.2337739312320144,
+    "R_top_m": 3.2337739312320144,
+    "Rmax_m": 6.283598232422121,
+    "Rmin_m": 2.1326300627116668,
+    "Z_axis_m": -5.1688970437169246e-08,
+    "Zmax_m": 4.489445748144683,
+    "Zmin_m": -4.48944574211794,
+    "a_m": 2.075484084855227,
+    "area_m2": 27.467771425900004,
+    "delta_bar": 0.4694520297431447,
+    "delta_l": 0.4694520297431447,
+    "delta_u": 0.4694520297431447,
+    "kappa": 2.1630836766664325,
+    "perimeter_m": 21.133044750415575,
+    "source_method": "analyze_star_separatrix",
+    "volume_toroidal_m3": 726.2577918973197
+  },
+  "global_numbers": {
+    "B0_toroidal_T": 4.94283169861883,
+    "beta_p": 0.01800877624998405,
+    "beta_t_volume_avg": 5.680397760952958e-05,
+    "plasma_volume_m3": 697.5658402850588,
+    "pressure_avg_Pa": 552.1925388424369,
+    "pressure_volume_integral_J_like": 385190.6523567644,
+    "thermal_energy_1p5p_J": 577785.9785351467
+  },
+  "materials_meta": {
+    "blanket_outer_material": "EUROFER97",
+    "blanket_outer_resistivity_ohm_m": 1e-06,
+    "first_wall_material": "EUROFER97",
+    "first_wall_resistivity_ohm_m": 1e-06,
+    "star_vessel_material": "SS316L",
+    "star_vessel_resistivity_ohm_m": 7.5e-07
+  },
+  "midplane_lcfs_crossings_R_m": [
+    2.1326300627116668,
+    6.283598232422121
+  ],
+  "passive_meta": {
+    "default_material": "SS316L",
+    "default_resistivity_ohm_m": 7.5e-07,
+    "n_filaments": 3470,
+    "n_structures": 32,
+    "target_dR_m": 0.1,
+    "target_dZ_m": 0.1
+  }
+}

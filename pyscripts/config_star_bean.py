@@ -359,8 +359,8 @@ margin_RZ = 0.5
 # ----------------------------
 # Newton–Krylov solver
 # ----------------------------
-target_rel_tol = 5e-5
-target_rel_tol_ramp = 2e-5
+target_rel_tol = 1e-9 # 5e-5 1e-9
+target_rel_tol_ramp = 1e-8 # 2e-5
 f_list_equilibrium = (0.20, 0.40, 0.70, 1.0)
 
 # ----------------------------
