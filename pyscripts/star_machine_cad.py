@@ -40,7 +40,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Any, Dict, List, Optional, Tuple, Set
 import re
 
 import numpy as np
@@ -69,6 +69,11 @@ class CADLayers:
     wall_outer: str = "WALL_OUTER"
     wall_inner: str = "WALL_INNER"
     plasma_target: str = "PLASMA_TARGET"
+
+    # Passive / structural CAD layers
+    # STAR_VESSEL is treated as real passive metal geometry, not active PF/OH current.
+    star_vessel: str = "STAR_VESSEL"
+    passive_layer_prefix: str = "PASSIVE_"
 
     coil_layer_prefix: str = "COIL_"          # Recommended: COIL_CS, COIL_PF1U, COIL_CS1M, ...
     coils_layer: str = "COILS"                # Fallback: all rectangles here
@@ -181,6 +186,42 @@ class CADImportOptions:
     blanket_containment_radius: float = -1e-9
 
     # -------------------------
+    # STAR_VESSEL / passive structure discretization
+    # -------------------------
+    # New preferred passive model: discretize real CAD solids on STAR_VESSEL
+    # and PASSIVE_* layers. These replace the old artificial blanket fill.
+    passive_structures_enabled: bool = True
+    passive_use_star_vessel: bool = True
+    passive_use_passive_prefix: bool = True
+
+    # Passive cell target size [m]. Keep coarse enough to avoid thousands of coils.
+    passive_target_dR_m: float = 0.10
+    passive_target_dZ_m: float = 0.10
+    passive_nR_max: int = 80
+    passive_nZ_max: int = 160
+    passive_min_cell_area_m2: float = 1.0e-6
+    passive_containment_radius: float = -1e-9
+
+    # Effective material metadata. Static FreeGS/FreeGSNKE forward equilibria do not
+    # use resistivity directly, but the metadata is attached for passive/dynamic models
+    # and for diagnostics.
+    star_vessel_material: str = "SS316L"
+    star_vessel_resistivity_ohm_m: float = 0.75e-6
+    passive_default_material: str = "SS316L"
+    passive_default_resistivity_ohm_m: float = 0.75e-6
+    first_wall_material: str = "EUROFER97"
+    first_wall_resistivity_ohm_m: float = 1.0e-6
+    blanket_outer_material: str = "EUROFER97"
+    blanket_outer_resistivity_ohm_m: float = 1.0e-6
+
+    # Semantic wall mapping for the updated CAD:
+    # WALL_INNER = first wall / limiter; WALL_OUTER = blanket outer/back plate.
+    # Machine wall remains WALL_OUTER for compatibility unless your solver later
+    # needs a separate computational envelope.
+    machine_wall_source: str = "outer"   # "outer" | "inner"
+    limiter_source: str = "inner"        # "inner" | "outer"
+
+    # -------------------------
     # Coil Imax recommendation (engineering)
     # -------------------------
     # Effective conductor area = fill_factor * geometric rectangle area.
@@ -227,7 +268,7 @@ class CADImportOptions:
     # Example:
     #   0.45 means central 45% of the full CS height is CS_MID,
     #   and the remaining 55% is CS_END, split between top and bottom.
-    cs_mid_fraction: float = 0.45
+    cs_mid_fraction: float = 1.0 #0.45
 
     # Optional absolute Z cutoff [m].
     # If None, the code computes:
@@ -924,6 +965,212 @@ def _normalized_area_weights_for_labels(
 
     return {lab: area / total for lab, area in areas.items()}
 
+def _group_packs_by_family(
+    packs: Dict[str, Tuple[float, float, float, float]]
+) -> Dict[str, List[str]]:
+    """
+    Group physical CAD coils or filament packs by current-control family.
+    """
+    groups: Dict[str, List[str]] = {}
+    for lab in packs.keys():
+        fam = _coil_family(lab)
+        groups.setdefault(fam, []).append(_normalize_label(lab))
+    return groups
+
+
+def _safe_pack_area_m2(pack: Tuple[float, float, float, float]) -> float:
+    """
+    Geometric cross-section area of a rectangular winding pack/subpack.
+    pack = (Rc, Zc, dR, dZ), with dR/dZ half-extents.
+    """
+    try:
+        _, _, dR, dZ = pack
+        area = 4.0 * float(dR) * float(dZ)
+        if np.isfinite(area) and area > 0.0:
+            return float(area)
+    except Exception:
+        pass
+    return 0.0
+
+
+def _compute_imax_metrics_from_physical_packs(
+    physical_packs: Dict[str, Tuple[float, float, float, float]],
+    opts: CADImportOptions,
+) -> Tuple[Dict[str, Dict[str, float]], Dict[str, float]]:
+    """
+    Compute recommended Imax using physical CAD coil rectangles, not the
+    discretized filament rectangles.
+
+    This fixes the bug where family_mode='min' becomes the area of the
+    smallest filament instead of the area of the smallest real coil.
+    """
+    fill = float(getattr(opts, "fill_factor", 0.75))
+    Jdef = float(getattr(opts, "Jeng_default_A_per_mm2", 40.0))
+    fam_mode = str(getattr(opts, "family_mode", "min")).strip().lower()
+    J_over = getattr(opts, "family_J_override_A_per_mm2", None) or {}
+
+    family_groups = _group_packs_by_family(physical_packs)
+
+    coil_family_metrics: Dict[str, Dict[str, float]] = {}
+    Imax_recommended_MA: Dict[str, float] = {}
+
+    for fam, labs in family_groups.items():
+        areas_m2 = []
+        for lab in labs:
+            pack = physical_packs.get(lab)
+            if pack is None:
+                continue
+            area = _safe_pack_area_m2(pack)
+            if area > 0.0:
+                areas_m2.append(area)
+
+        areas_m2 = np.asarray(areas_m2, dtype=float)
+
+        if len(areas_m2) == 0:
+            A_min_m2 = 0.0
+            A_sum_m2 = 0.0
+        else:
+            A_min_m2 = float(np.min(areas_m2))
+            A_sum_m2 = float(np.sum(areas_m2))
+
+        Aeff_min_m2 = fill * A_min_m2
+        Aeff_sum_m2 = fill * A_sum_m2
+
+        Aeff_min_mm2 = Aeff_min_m2 * 1.0e6
+        Aeff_sum_mm2 = Aeff_sum_m2 * 1.0e6
+
+        J = float(J_over.get(fam, Jdef))
+
+        if fam_mode == "sum":
+            Aeff_mm2 = Aeff_sum_mm2
+        else:
+            Aeff_mm2 = Aeff_min_mm2
+
+        Imax_A = J * Aeff_mm2
+        Imax_MA = Imax_A / 1.0e6
+
+        coil_family_metrics[fam] = {
+            "n_physical_coils": float(len(labs)),
+            "A_min_m2": float(A_min_m2),
+            "A_sum_m2": float(A_sum_m2),
+            "fill_factor": float(fill),
+            "Aeff_min_mm2": float(Aeff_min_mm2),
+            "Aeff_sum_mm2": float(Aeff_sum_mm2),
+            "J_A_per_mm2": float(J),
+            "family_mode_min": 1.0 if fam_mode != "sum" else 0.0,
+            "family_mode_sum": 1.0 if fam_mode == "sum" else 0.0,
+            "area_basis_physical_cad": 1.0,
+            "Imax_recommended_MA": float(Imax_MA),
+        }
+
+        Imax_recommended_MA[fam] = float(Imax_MA)
+
+    return coil_family_metrics, Imax_recommended_MA
+
+
+def _add_segmented_group_imax_metrics(
+    geom: Dict,
+    opts: CADImportOptions,
+) -> None:
+    """
+    Add effective Imax estimates for artificial segmented groups such as
+    CS_MID and CS_END.
+
+    These are not independent physical CAD coils. Their area basis is the
+    sum of the discretized subcoil areas belonging to each group.
+    """
+    coils = geom.get("coils", {}) or {}
+    coil_groups = geom.get("coil_groups", {}) or {}
+
+    coil_family_metrics = geom.setdefault("coil_family_metrics", {})
+    Imax_recommended_MA = geom.setdefault("Imax_recommended_MA", {})
+
+    fill = float(getattr(opts, "fill_factor", 0.75))
+    Jdef = float(getattr(opts, "Jeng_default_A_per_mm2", 40.0))
+    J_over = getattr(opts, "family_J_override_A_per_mm2", None) or {}
+
+    for fam in ["CS_MID", "CS_END"]:
+        labs = list(coil_groups.get(fam, []))
+        if not labs:
+            continue
+
+        areas_m2 = []
+        for lab in labs:
+            pack = coils.get(_normalize_label(lab))
+            if pack is None:
+                continue
+            area = _safe_pack_area_m2(pack)
+            if area > 0.0:
+                areas_m2.append(area)
+
+        areas_m2 = np.asarray(areas_m2, dtype=float)
+
+        A_sum_m2 = float(np.sum(areas_m2)) if len(areas_m2) else 0.0
+        A_min_m2 = float(np.min(areas_m2)) if len(areas_m2) else 0.0
+
+        Aeff_sum_m2 = fill * A_sum_m2
+        Aeff_min_m2 = fill * A_min_m2
+
+        Aeff_sum_mm2 = Aeff_sum_m2 * 1.0e6
+        Aeff_min_mm2 = Aeff_min_m2 * 1.0e6
+
+        # By default use CS J override for CS_MID/CS_END if present.
+        J = float(J_over.get(fam, J_over.get("CS", Jdef)))
+
+        Imax_A = J * Aeff_sum_mm2
+        Imax_MA = Imax_A / 1.0e6
+
+        coil_family_metrics[fam] = {
+            "n_filaments": float(len(labs)),
+            "A_min_m2": float(A_min_m2),
+            "A_sum_m2": float(A_sum_m2),
+            "fill_factor": float(fill),
+            "Aeff_min_mm2": float(Aeff_min_mm2),
+            "Aeff_sum_mm2": float(Aeff_sum_mm2),
+            "J_A_per_mm2": float(J),
+            "family_mode_min": 0.0,
+            "family_mode_sum": 1.0,
+            "area_basis_segmented_filament_sum": 1.0,
+            "Imax_recommended_MA": float(Imax_MA),
+        }
+
+        Imax_recommended_MA[fam] = float(Imax_MA)
+
+
+def _attach_imax_metrics_to_geom(
+    geom: Dict,
+    opts: CADImportOptions,
+) -> None:
+    """
+    Attach corrected Imax metrics to geom.
+
+    Parent families use original physical CAD rectangles.
+    Artificial segmented groups use partitioned filament area sums.
+    """
+    physical_packs = (
+        geom.get("base_coils", None)
+        or geom.get("physical_coils", None)
+        or geom.get("coil_base_rects", None)
+        or geom.get("coils", {})
+    )
+
+    metrics, imax = _compute_imax_metrics_from_physical_packs(
+        physical_packs,
+        opts,
+    )
+
+    geom["coil_family_metrics"] = metrics
+    geom["Imax_recommended_MA"] = imax
+
+    geom["Imax_assumptions"] = {
+        "fill_factor": float(getattr(opts, "fill_factor", 0.75)),
+        "Jeng_default_A_per_mm2": float(getattr(opts, "Jeng_default_A_per_mm2", 40.0)),
+        "family_mode": str(getattr(opts, "family_mode", "min")),
+        "area_basis": "physical_CAD_rectangles_for_parent_families",
+        "segmented_groups_area_basis": "sum_of_discretized_filament_areas",
+    }
+
+    _add_segmented_group_imax_metrics(geom, opts)
 
 def _add_segmented_cs_groups_to_geom(
     geom: Dict,
@@ -1080,6 +1327,237 @@ def _build_blanket_filaments(
         fil.append((lab, float(Rc), float(Zc), float(dR), float(dZ)))
     return fil
 
+
+
+# -----------------------------
+# Passive STAR_VESSEL / structural filaments
+# -----------------------------
+
+def _prepare_closed_cad_polyline(
+    xy: np.ndarray,
+    *,
+    unit_scale: float,
+    opts: CADImportOptions,
+    n_resample: Optional[int] = None,
+) -> np.ndarray:
+    """
+    Scale, close, orient, densify, and optionally resample one CAD closed polyline.
+    """
+    P = np.asarray(xy, float) * float(unit_scale)
+    P = _ensure_closed(_dedupe_sequential(P))
+
+    if opts.enforce_ccw:
+        P = _enforce_ccw(P)
+    if opts.canonical_start:
+        P = _rotate_to_outboard_midplane(P)
+
+    maxseg = float(getattr(opts, "max_seg_len_wall", 0.0))
+    if np.isfinite(maxseg) and maxseg > 0.0:
+        P = _subdivide_closed_polyline_by_maxseg(P, maxseg)
+
+    if n_resample is not None and int(n_resample) > 0:
+        P = _maybe_resample(
+            P,
+            int(n_resample),
+            str(getattr(opts, "resample_walls", "auto")),
+            int(getattr(opts, "min_wall_pts", 400)),
+        )
+
+    return _ensure_closed(_dedupe_sequential(P))
+
+
+def _collect_closed_polygons_from_layer(
+    msp,
+    layer_name: str,
+    *,
+    unit_scale: float,
+    opts: CADImportOptions,
+    min_abs_area_m2: float = 1.0e-8,
+) -> List[np.ndarray]:
+    """
+    Collect all closed polygon-like entities from a DXF layer.
+    Returns closed, scaled, CCW polylines in meters.
+    """
+    polys: List[np.ndarray] = []
+    for e in msp.query(f'*[layer=="{layer_name}"]'):
+        try:
+            xy = _entity_to_xy(e, opts)
+            P = _prepare_closed_cad_polyline(
+                xy,
+                unit_scale=unit_scale,
+                opts=opts,
+                n_resample=None,
+            )
+            if len(_drop_duplicate_endpoint(P)) >= 3 and abs(_polygon_area(P)) >= float(min_abs_area_m2):
+                polys.append(P)
+        except Exception:
+            continue
+    return polys
+
+
+def _collect_passive_polygons(
+    msp,
+    layers: CADLayers,
+    *,
+    unit_scale: float,
+    opts: CADImportOptions,
+) -> List[Dict[str, Any]]:
+    """
+    Read STAR_VESSEL and PASSIVE_* polygon layers as passive structural solids.
+    """
+    out: List[Dict[str, Any]] = []
+
+    if bool(getattr(opts, "passive_use_star_vessel", True)):
+        layer = str(getattr(layers, "star_vessel", "STAR_VESSEL"))
+        for i, poly in enumerate(
+            _collect_closed_polygons_from_layer(msp, layer, unit_scale=unit_scale, opts=opts),
+            start=1,
+        ):
+            out.append({
+                "layer": layer,
+                "name": f"STAR_VESSEL_{i:03d}",
+                "xy": poly,
+                "material": str(getattr(opts, "star_vessel_material", "SS316L")),
+                "resistivity_ohm_m": float(getattr(opts, "star_vessel_resistivity_ohm_m", 0.75e-6)),
+            })
+
+    if bool(getattr(opts, "passive_use_passive_prefix", True)):
+        prefix = str(getattr(layers, "passive_layer_prefix", "PASSIVE_")).upper()
+        layer_names = sorted({str(e.dxf.layer) for e in msp if str(e.dxf.layer).upper().startswith(prefix)})
+        for layer in layer_names:
+            for i, poly in enumerate(
+                _collect_closed_polygons_from_layer(msp, layer, unit_scale=unit_scale, opts=opts),
+                start=1,
+            ):
+                lname = _normalize_label(layer)
+                out.append({
+                    "layer": layer,
+                    "name": f"{lname}_{i:03d}",
+                    "xy": poly,
+                    "material": str(getattr(opts, "passive_default_material", "SS316L")),
+                    "resistivity_ohm_m": float(getattr(opts, "passive_default_resistivity_ohm_m", 0.75e-6)),
+                })
+
+    return out
+
+
+def _discretize_passive_polygon(
+    poly_closed: np.ndarray,
+    *,
+    label_prefix: str,
+    material: str,
+    resistivity_ohm_m: float,
+    opts: CADImportOptions,
+) -> List[Tuple[str, float, float, float, float, str, float]]:
+    """
+    Discretize one passive CAD polygon into rectangular filament cells.
+
+    Returns:
+        [(label, Rc, Zc, dR, dZ, material, resistivity_ohm_m), ...]
+
+    These are passive structural elements: current=0, control=False.
+    """
+    P = _drop_duplicate_endpoint(np.asarray(poly_closed, float))
+    if len(P) < 3:
+        return []
+
+    xmin, xmax, zmin, zmax = _bbox_from_poly(P)
+    width = xmax - xmin
+    height = zmax - zmin
+    if width <= 0.0 or height <= 0.0:
+        return []
+
+    target_R = max(1.0e-6, float(getattr(opts, "passive_target_dR_m", 0.10)))
+    target_Z = max(1.0e-6, float(getattr(opts, "passive_target_dZ_m", 0.10)))
+
+    nR = int(np.ceil(width / target_R))
+    nZ = int(np.ceil(height / target_Z))
+    nR = max(1, min(nR, int(getattr(opts, "passive_nR_max", 80))))
+    nZ = max(1, min(nZ, int(getattr(opts, "passive_nZ_max", 160))))
+
+    cell_w = width / float(nR)
+    cell_h = height / float(nZ)
+    dR = 0.5 * cell_w
+    dZ = 0.5 * cell_h
+
+    if cell_w * cell_h < float(getattr(opts, "passive_min_cell_area_m2", 1.0e-6)):
+        return []
+
+    xs = xmin + (np.arange(nR) + 0.5) * cell_w
+    zs = zmin + (np.arange(nZ) + 0.5) * cell_h
+    XX, ZZ = np.meshgrid(xs, zs, indexing="xy")
+    pts = np.column_stack([XX.ravel(), ZZ.ravel()])
+
+    path = MplPath(P, closed=True)
+    radius = float(getattr(opts, "passive_containment_radius", -1e-9))
+    inside = path.contains_points(pts, radius=radius)
+
+    fil: List[Tuple[str, float, float, float, float, str, float]] = []
+    k = 0
+    prefix = _normalize_label(label_prefix)
+    for (R, Z), ok in zip(pts, inside):
+        if not bool(ok):
+            continue
+        k += 1
+        lab = f"{prefix}_P{k:04d}"
+        fil.append((lab, float(R), float(Z), float(dR), float(dZ), str(material), float(resistivity_ohm_m)))
+
+    return fil
+
+
+def _build_passive_filaments_from_structures(
+    passive_structures: List[Dict[str, Any]],
+    *,
+    opts: CADImportOptions,
+) -> List[Tuple[str, float, float, float, float, str, float]]:
+    """
+    Convert CAD passive structures into passive filament cells.
+    """
+    filaments: List[Tuple[str, float, float, float, float, str, float]] = []
+    used: Set[str] = set()
+
+    for s in passive_structures:
+        base = _normalize_label(s.get("name", "PASSIVE"))
+        poly = np.asarray(s.get("xy"), float)
+        material = str(s.get("material", getattr(opts, "passive_default_material", "SS316L")))
+        rho = float(s.get("resistivity_ohm_m", getattr(opts, "passive_default_resistivity_ohm_m", 0.75e-6)))
+        local = _discretize_passive_polygon(
+            poly,
+            label_prefix=base,
+            material=material,
+            resistivity_ohm_m=rho,
+            opts=opts,
+        )
+        for lab, Rc, Zc, dR, dZ, mat, rr in local:
+            lab0 = lab
+            kk = 1
+            while lab in used:
+                kk += 1
+                lab = f"{lab0}_{kk}"
+            used.add(lab)
+            filaments.append((lab, Rc, Zc, dR, dZ, mat, rr))
+
+    return filaments
+
+
+def _passive_structures_bbox(passive_structures: List[Dict[str, Any]]) -> Optional[Tuple[float, float, float, float]]:
+    """
+    Combined bbox for passive structures.
+    """
+    bbs = []
+    for s in passive_structures:
+        try:
+            bbs.append(_bbox_from_poly(np.asarray(s["xy"], float)))
+        except Exception:
+            continue
+    if not bbs:
+        return None
+    return (
+        float(min(b[0] for b in bbs)),
+        float(max(b[1] for b in bbs)),
+        float(min(b[2] for b in bbs)),
+        float(max(b[3] for b in bbs)),
+    )
 
 # -----------------------------
 # Plasma geometry pack
@@ -1646,9 +2124,27 @@ def load_geom_from_dxf(
         inner_xy = _subdivide_closed_polyline_by_maxseg(inner_xy, float(getattr(opts, "max_seg_len_wall", 0.0)))
         inner_xy = _maybe_resample(inner_xy, int(opts.n_inner), str(opts.resample_walls), int(opts.min_wall_pts))
 
-    # ---- BLANKET filaments (AUTO between inner & outer)
+    # ---- Passive structural polygons / filaments
+    # Preferred new model: use real CAD passive solids (STAR_VESSEL and PASSIVE_*),
+    # not the old artificial fill between WALL_INNER and WALL_OUTER.
+    passive_structures: List[Dict[str, Any]] = []
+    passive_filaments: List[Tuple[str, float, float, float, float, str, float]] = []
+    if bool(getattr(opts, "passive_structures_enabled", True)):
+        passive_structures = _collect_passive_polygons(
+            msp,
+            layers,
+            unit_scale=unit_scale,
+            opts=opts,
+        )
+        passive_filaments = _build_passive_filaments_from_structures(
+            passive_structures,
+            opts=opts,
+        )
+
+    # ---- Legacy blanket filaments (AUTO between inner & outer)
+    # Kept only as fallback. With STAR_VESSEL available, leave blanket_enabled=False.
     blanket_filaments = []
-    if bool(getattr(opts, "blanket_enabled", False)):
+    if bool(getattr(opts, "blanket_enabled", False)) and not passive_filaments:
         blanket_filaments = _build_blanket_filaments(outer_xy, inner_xy, opts=opts)
 
     # ---- Plasma target: CAD or AUTO
@@ -1668,6 +2164,8 @@ def load_geom_from_dxf(
     plasma_meta: Dict[str, float] = {}
     xpoints_target: List[Tuple[float, float, str]] = []
     strike_lines_target: List[np.ndarray] = []
+    markers: Dict[str, Any] = {}
+    geom_markers_meta: Dict[str, Any] = {"found": [], "layers": {}}
 
     mode_pt = str(getattr(opts, "plasma_target_mode", "cad")).strip().lower()
     want_auto = (mode_pt == "auto") or (plasma_xy is None and mode_pt == "cad")
@@ -1712,8 +2210,6 @@ def load_geom_from_dxf(
         )
 
         # ---- NEW: import divertor windows/markers from CAD (XPT/STRIKE)
-        markers: Dict[str, Any] = {}
-
         # helper reusing the local polylines_in_layer()
         def _load_marker(layer_name: str) -> Optional[Dict[str, Any]]:
             cand = polylines_in_layer(layer_name)
@@ -1799,6 +2295,10 @@ def load_geom_from_dxf(
     # ---- Coils (active)
     coils: Dict[str, Tuple[float, float, float, float]] = {}
 
+    # Physical CAD rectangles before discretization.
+    # Used only for Imax/engineering cross-section estimates.
+    base_coils: Dict[str, Tuple[float, float, float, float]] = {}
+
     coil_polys: List[Tuple[str, np.ndarray]] = []
     for e in msp.query("LWPOLYLINE"):
         layer = str(getattr(e.dxf, "layer", ""))
@@ -1823,11 +2323,14 @@ def load_geom_from_dxf(
 
             label = base_label
             k = 1
-            while label in coils:
+
+            # Avoid duplicate physical labels.
+            while label in base_coils:
                 k += 1
                 label = f"{base_label}_{k}"
 
-            # coils[label] = (float(Rc), float(Zc), float(dR), float(dZ))
+            base_coils[label] = (float(Rc), float(Zc), float(dR), float(dZ))
+
             _add_discretized_active_coil(
                 coils,
                 label,
@@ -1858,12 +2361,14 @@ def load_geom_from_dxf(
                     label = lab_names[j]
 
             label = _normalize_label(label)
-            if label in coils:
+            if label in base_coils:
                 raise ValueError(
                     f"Duplicate coil label '{label}' inferred from COILS/COIL_LABELS. "
                     "This mode is ambiguous. Prefer per-coil layers COIL_<NAME>."
                 )
-            # coils[label] = (float(Rc), float(Zc), float(dR), float(dZ))
+
+            base_coils[label] = (float(Rc), float(Zc), float(dR), float(dZ))
+
             _add_discretized_active_coil(
                 coils,
                 label,
@@ -1891,60 +2396,84 @@ def load_geom_from_dxf(
         w = areas / float(np.sum(areas)) if float(np.sum(areas)) > 0 else np.ones_like(areas) / len(areas)
         coil_group_weights[fam] = {lab: float(wi) for lab, wi in zip(labs, w)}
 
-    # ---- Coil family metrics + Imax recommendation
-    fill = float(getattr(opts, "fill_factor", 0.75))
-    Jdef = float(getattr(opts, "Jeng_default_A_per_mm2", 40.0))
-    fam_mode = str(getattr(opts, "family_mode", "min")).strip().lower()
-    J_over = getattr(opts, "family_J_override_A_per_mm2", None) or {}
+    # # ---- Coil family metrics + Imax recommendation
+    # fill = float(getattr(opts, "fill_factor", 0.75))
+    # Jdef = float(getattr(opts, "Jeng_default_A_per_mm2", 40.0))
+    # fam_mode = str(getattr(opts, "family_mode", "min")).strip().lower()
+    # J_over = getattr(opts, "family_J_override_A_per_mm2", None) or {}
 
-    coil_family_metrics: Dict[str, Dict[str, float]] = {}
-    Imax_recommended_MA: Dict[str, float] = {}
-
-    for fam, labs in coil_groups.items():
-        areas_m2 = []
-        for lab in labs:
-            _Rc, _Zc, dR, dZ = coils[lab]
-            areas_m2.append(_area_from_dR_dZ(dR, dZ))
-        areas_m2 = np.asarray(areas_m2, float)
-
-        A_min_m2 = float(np.min(areas_m2)) if len(areas_m2) else 0.0
-        A_sum_m2 = float(np.sum(areas_m2)) if len(areas_m2) else 0.0
-
-        Aeff_min_m2 = float(fill) * A_min_m2
-        Aeff_sum_m2 = float(fill) * A_sum_m2
-
-        # convert to mm^2
-        Aeff_min_mm2 = Aeff_min_m2 * 1.0e6
-        Aeff_sum_mm2 = Aeff_sum_m2 * 1.0e6
-
-        J = float(J_over.get(fam, Jdef))
-
-        Aeff_mm2 = Aeff_min_mm2 if fam_mode == "min" else Aeff_sum_mm2
-        Imax_A = J * Aeff_mm2
-        Imax_MA = Imax_A / 1.0e6
-
-        coil_family_metrics[fam] = {
-            "n_coils": float(len(labs)),
-            "A_min_m2": float(A_min_m2),
-            "A_sum_m2": float(A_sum_m2),
-            "fill_factor": float(fill),
-            "Aeff_min_mm2": float(Aeff_min_mm2),
-            "Aeff_sum_mm2": float(Aeff_sum_mm2),
-            "J_A_per_mm2": float(J),
-            "family_mode_min": 1.0 if fam_mode == "min" else 0.0,
-            "Imax_recommended_MA": float(Imax_MA),
-        }
-        Imax_recommended_MA[fam] = float(Imax_MA)
+    # coil_family_metrics: Dict[str, Dict[str, float]] = {}
+    # Imax_recommended_MA: Dict[str, float] = {}
+    #
+    # for fam, labs in coil_groups.items():
+    #     areas_m2 = []
+    #     for lab in labs:
+    #         _Rc, _Zc, dR, dZ = coils[lab]
+    #         areas_m2.append(_area_from_dR_dZ(dR, dZ))
+    #     areas_m2 = np.asarray(areas_m2, float)
+    #
+    #     A_min_m2 = float(np.min(areas_m2)) if len(areas_m2) else 0.0
+    #     A_sum_m2 = float(np.sum(areas_m2)) if len(areas_m2) else 0.0
+    #
+    #     Aeff_min_m2 = float(fill) * A_min_m2
+    #     Aeff_sum_m2 = float(fill) * A_sum_m2
+    #
+    #     # convert to mm^2
+    #     Aeff_min_mm2 = Aeff_min_m2 * 1.0e6
+    #     Aeff_sum_mm2 = Aeff_sum_m2 * 1.0e6
+    #
+    #     J = float(J_over.get(fam, Jdef))
+    #
+    #     Aeff_mm2 = Aeff_min_mm2 if fam_mode == "min" else Aeff_sum_mm2
+    #     Imax_A = J * Aeff_mm2
+    #     Imax_MA = Imax_A / 1.0e6
+    #
+    #     coil_family_metrics[fam] = {
+    #         "n_coils": float(len(labs)),
+    #         "A_min_m2": float(A_min_m2),
+    #         "A_sum_m2": float(A_sum_m2),
+    #         "fill_factor": float(fill),
+    #         "Aeff_min_mm2": float(Aeff_min_mm2),
+    #         "Aeff_sum_mm2": float(Aeff_sum_mm2),
+    #         "J_A_per_mm2": float(J),
+    #         "family_mode_min": 1.0 if fam_mode == "min" else 0.0,
+    #         "Imax_recommended_MA": float(Imax_MA),
+    #     }
+    #     Imax_recommended_MA[fam] = float(Imax_MA)
 
     # Assemble geom dict
     geom: Dict = {
+        # Updated CAD semantics:
+        #   WALL_INNER -> first wall / limiter / plasma-facing boundary.
+        #   WALL_OUTER -> blanket outer/back plate.
+        #   STAR_VESSEL/PASSIVE_* -> passive structural metal.
         "R_outer": outer_xy[:, 0],
         "Z_outer": outer_xy[:, 1],
+        "R_blanket_outer": outer_xy[:, 0],
+        "Z_blanket_outer": outer_xy[:, 1],
         "coils": coils,
+        "base_coils": base_coils,
+        "physical_coils": base_coils,
         "coil_groups": coil_groups,
         "coil_group_weights": coil_group_weights,
         "cad_path": str(dxf_path),
         "unit_scale": float(unit_scale),
+        "materials_meta": dict(
+            first_wall_material=str(getattr(opts, "first_wall_material", "EUROFER97")),
+            first_wall_resistivity_ohm_m=float(getattr(opts, "first_wall_resistivity_ohm_m", 1.0e-6)),
+            blanket_outer_material=str(getattr(opts, "blanket_outer_material", "EUROFER97")),
+            blanket_outer_resistivity_ohm_m=float(getattr(opts, "blanket_outer_resistivity_ohm_m", 1.0e-6)),
+            star_vessel_material=str(getattr(opts, "star_vessel_material", "SS316L")),
+            star_vessel_resistivity_ohm_m=float(getattr(opts, "star_vessel_resistivity_ohm_m", 0.75e-6)),
+        ),
+        "geometry_semantics": dict(
+            WALL_INNER="first_wall_limiter_plasma_boundary",
+            WALL_OUTER="blanket_outer_back_plate",
+            STAR_VESSEL="passive_structural_vessel_support",
+            active_coils="COIL_* layers",
+            legacy_blanket_fill_enabled=bool(getattr(opts, "blanket_enabled", False)),
+            passive_structures_enabled=bool(getattr(opts, "passive_structures_enabled", True)),
+        ),
         "sampling_meta": dict(
             prefer_path_flattening=bool(getattr(opts, "prefer_path_flattening", True)),
             flatten_distance=float(getattr(opts, "flatten_distance", 0.002)),
@@ -1955,16 +2484,17 @@ def load_geom_from_dxf(
             n_inner=int(getattr(opts, "n_inner", 2001)),
             n_plasma=int(getattr(opts, "n_plasma", 501)),
         ),
-        "coil_family_metrics": dict(coil_family_metrics),
-        "Imax_recommended_MA": dict(Imax_recommended_MA),
-        "Imax_assumptions": dict(
-            fill_factor=float(fill),
-            Jeng_default_A_per_mm2=float(Jdef),
-            family_mode=str(fam_mode),
-        ),
+        # "coil_family_metrics": dict(coil_family_metrics),
+        # "Imax_recommended_MA": dict(Imax_recommended_MA),
+        # "Imax_assumptions": dict(
+        #     fill_factor=float(fill),
+        #     Jeng_default_A_per_mm2=float(Jdef),
+        #     family_mode=str(fam_mode),
+        # ),
     }
 
     _add_segmented_cs_groups_to_geom(geom, opts)
+    _attach_imax_metrics_to_geom(geom, opts)
 
     # Attach marker windows (if any)
     if markers:
@@ -1982,6 +2512,48 @@ def load_geom_from_dxf(
     if inner_xy is not None:
         geom["R_inner"] = inner_xy[:, 0]
         geom["Z_inner"] = inner_xy[:, 1]
+        geom["R_limiter"] = inner_xy[:, 0]
+        geom["Z_limiter"] = inner_xy[:, 1]
+        geom["limiter_material"] = str(getattr(opts, "first_wall_material", "EUROFER97"))
+        geom["limiter_resistivity_ohm_m"] = float(getattr(opts, "first_wall_resistivity_ohm_m", 1.0e-6))
+
+    # Blanket region is treated as a forbidden/solid region for plasma geometry.
+    # It is not automatically discretized as conducting filaments.
+    if inner_xy is not None:
+        geom["blanket_region"] = dict(
+            inner_layer=str(layers.wall_inner),
+            outer_layer=str(layers.wall_outer),
+            material=str(getattr(opts, "blanket_outer_material", "EUROFER97")),
+            resistivity_ohm_m=float(getattr(opts, "blanket_outer_resistivity_ohm_m", 1.0e-6)),
+            forbidden_for_plasma=True,
+            note="Region between WALL_INNER and WALL_OUTER represents blanket/solid region; LCFS should stay inside WALL_INNER.",
+        )
+
+    if passive_structures:
+        geom["passive_structures"] = [
+            {
+                "layer": str(p.get("layer", "")),
+                "name": str(p.get("name", "")),
+                "xy": np.asarray(p.get("xy"), float),
+                "material": str(p.get("material", "")),
+                "resistivity_ohm_m": float(p.get("resistivity_ohm_m", np.nan)),
+                "area_m2": float(abs(_polygon_area(np.asarray(p.get("xy"), float)))),
+            }
+            for p in passive_structures
+        ]
+        geom["solid_regions"] = list(geom["passive_structures"])
+
+    if passive_filaments:
+        geom["passive_filaments"] = list(passive_filaments)
+        geom["passive_meta"] = dict(
+            n_structures=int(len(passive_structures)),
+            n_filaments=int(len(passive_filaments)),
+            target_dR_m=float(getattr(opts, "passive_target_dR_m", 0.10)),
+            target_dZ_m=float(getattr(opts, "passive_target_dZ_m", 0.10)),
+            default_material=str(getattr(opts, "passive_default_material", "SS316L")),
+            default_resistivity_ohm_m=float(getattr(opts, "passive_default_resistivity_ohm_m", 0.75e-6)),
+        )
+
     if plasma_xy is not None:
         geom["R_plasma"] = plasma_xy[:, 0]
         geom["Z_plasma"] = plasma_xy[:, 1]
@@ -2112,10 +2684,17 @@ def make_star_machine_from_cad(
                 f"Missing expected coils/families in CAD import: {sorted(missing)}"
             )
 
-    vessel_wall = machine.Wall(geom["R_outer"], geom["Z_outer"])
+    wall_source = str(getattr(opts, "machine_wall_source", "outer")).strip().lower()
+    if wall_source == "inner" and "R_inner" in geom and "Z_inner" in geom:
+        vessel_wall = machine.Wall(geom["R_inner"], geom["Z_inner"])
+    else:
+        vessel_wall = machine.Wall(geom["R_outer"], geom["Z_outer"])
 
     limiter = None
-    if "R_inner" in geom and "Z_inner" in geom:
+    limiter_source = str(getattr(opts, "limiter_source", "inner")).strip().lower()
+    if limiter_source == "outer":
+        limiter = machine.Wall(geom["R_outer"], geom["Z_outer"])
+    elif "R_inner" in geom and "Z_inner" in geom:
         limiter = machine.Wall(geom["R_inner"], geom["Z_inner"])
 
     coils_for_machine = []
@@ -2141,21 +2720,64 @@ def make_star_machine_from_cad(
 
         coils_for_machine.append((lab, c))
 
-    # ---- Passive blanket filaments (current=0)
+    # ---- Passive structures / legacy blanket filaments (current=0, control=False)
     passive_labels: List[str] = []
 
-    if "blanket_filaments" in geom:
-        for (lab0, Rc, Zc, dR, dZ) in geom["blanket_filaments"]:
+    # New preferred passive structures from STAR_VESSEL / PASSIVE_*
+    if "passive_filaments" in geom:
+        for item in geom["passive_filaments"]:
+            lab0, Rc, Zc, dR, dZ, material, resistivity = item
             lab = _normalize_label(lab0)
-            c = machine.MultiCoil(float(Rc), float(Zc), float(dR), float(dZ))
+
+            c = machine.MultiCoil(
+                float(Rc),
+                float(Zc),
+                current=0.0,
+                turns=1.0,
+            )
 
             try:
                 c.label = lab
             except Exception:
                 pass
-
             try:
                 c.current = 0.0
+            except Exception:
+                pass
+            try:
+                c.control = False
+            except Exception:
+                pass
+            try:
+                c.material = str(material)
+                c.resistivity_ohm_m = float(resistivity)
+                c.dR = float(dR)
+                c.dZ = float(dZ)
+            except Exception:
+                pass
+
+            coils_for_machine.append((lab, c))
+            passive_labels.append(lab)
+
+    # Legacy artificial blanket fill, used only if explicitly enabled and no
+    # STAR_VESSEL passive filaments were generated.
+    if "blanket_filaments" in geom:
+        for (lab0, Rc, Zc, dR, dZ) in geom["blanket_filaments"]:
+            lab = _normalize_label(lab0)
+            c = machine.MultiCoil(
+                float(Rc),
+                float(Zc),
+                current=0.0,
+                turns=1.0,
+            )
+
+            try:
+                c.label = lab
+                c.control = False
+                c.material = "LEGACY_BLANKET_FILL"
+                c.resistivity_ohm_m = float(getattr(opts, "blanket_outer_resistivity_ohm_m", 1.0e-6))
+                c.dR = float(dR)
+                c.dZ = float(dZ)
             except Exception:
                 pass
 
@@ -2312,13 +2934,29 @@ def plot_cad_geometry(geom: Dict, show: bool = True, ax=None):
                 clip_on=False,
             )
 
-    ax.plot(geom["R_outer"], geom["Z_outer"], "k-", lw=2, label="CAD outer wall")
+    ax.plot(geom["R_outer"], geom["Z_outer"], "k-", lw=2, label="WALL_OUTER / blanket outer")
     if "R_inner" in geom:
-        ax.plot(geom["R_inner"], geom["Z_inner"], "k--", lw=1.5, label="CAD inner wall")
+        ax.plot(geom["R_inner"], geom["Z_inner"], "k--", lw=1.5, label="WALL_INNER / limiter")
+
+    if "passive_structures" in geom:
+        for ps in geom["passive_structures"]:
+            try:
+                xy = np.asarray(ps.get("xy"), float)
+                ax.fill(xy[:, 0], xy[:, 1], color="0.70", alpha=0.25, lw=0.5, edgecolor="0.25")
+            except Exception:
+                pass
+
     if "R_plasma" in geom:
         ax.plot(geom["R_plasma"], geom["Z_plasma"], color="tab:orange", lw=1.8, label="Plasma target (AUTO)")
 
-    # blanket filaments
+    # passive / blanket filaments
+    if "passive_filaments" in geom:
+        for item in geom["passive_filaments"]:
+            _lab, Rc, Zc, dR, dZ, _mat, _rho = item
+            x0, x1 = Rc - dR, Rc + dR
+            y0, y1 = Zc - dZ, Zc + dZ
+            ax.plot([x0, x1, x1, x0, x0], [y0, y0, y1, y1, y0], color="0.25", lw=0.15, alpha=0.55)
+
     if "blanket_filaments" in geom:
         for (_lab, Rc, Zc, dR, dZ) in geom["blanket_filaments"]:
             x0, x1 = Rc - dR, Rc + dR
@@ -2409,9 +3047,16 @@ if __name__ == "__main__":
         center_search_seed=0,
         strike_ray_fallback_len=3.0,
 
-        # Blanket passive filaments
-        blanket_enabled=True,
-        blanket_n_filaments=2500,
+        # Passive structures from STAR_VESSEL/PASSIVE_* are preferred.
+        # Legacy artificial blanket fill is disabled.
+        passive_structures_enabled=True,
+        passive_use_star_vessel=True,
+        passive_target_dR_m=0.10,
+        passive_target_dZ_m=0.10,
+
+        # Legacy blanket passive filaments
+        blanket_enabled=False,
+        blanket_n_filaments=0,
         blanket_distribution="stratified",
         blanket_seed=0,
         blanket_wall_margin_m=0.01,
@@ -2438,6 +3083,8 @@ if __name__ == "__main__":
 
     if "blanket_meta" in geom:
         print("[INFO] blanket_meta:", geom["blanket_meta"])
+    if "passive_meta" in geom:
+        print("[INFO] passive_meta:", geom["passive_meta"])
 
     if "plasma_auto_meta" in geom:
         meta = geom["plasma_auto_meta"]

@@ -630,6 +630,235 @@ def print_plasma_diagnostics(diag: Dict[str, Any]) -> None:
     print(f"area     = {float(diag['area_m2']):.4f} m^2")
     print(f"bounds   = R[{float(diag['Rmin']):.4f},{float(diag['Rmax']):.4f}]  Z[{float(diag['Zmin']):.4f},{float(diag['Zmax']):.4f}]")
 
+
+# -------------------------
+# Geometry/domain and plotting helpers for CAD/passive setup
+# -------------------------
+def _append_curve_points(points: List[np.ndarray], R: Any, Z: Any) -> None:
+    try:
+        r = np.asarray(R, dtype=float).ravel()
+        z = np.asarray(Z, dtype=float).ravel()
+        if r.size and z.size and r.size == z.size:
+            points.append(np.column_stack([r, z]))
+    except Exception:
+        pass
+
+
+def _machine_geometry_bbox(geom: Dict[str, Any], *, include_coils: bool = True, include_passives: bool = True) -> Tuple[float, float, float, float]:
+    """
+    Return a robust bbox for the whole CAD machine, not only the equilibrium domain.
+    Includes:
+      - WALL_OUTER / WALL_INNER
+      - active coil rectangles/filaments
+      - passive STAR_VESSEL structures/filaments
+      - optional plasma target
+    """
+    pts: List[np.ndarray] = []
+
+    _append_curve_points(pts, geom.get("R_outer"), geom.get("Z_outer"))
+    _append_curve_points(pts, geom.get("R_inner"), geom.get("Z_inner"))
+    _append_curve_points(pts, geom.get("R_limiter"), geom.get("Z_limiter"))
+    _append_curve_points(pts, geom.get("R_blanket_outer"), geom.get("Z_blanket_outer"))
+    _append_curve_points(pts, geom.get("R_plasma"), geom.get("Z_plasma"))
+
+    if include_coils:
+        for _lab, val in (geom.get("coils", {}) or {}).items():
+            try:
+                Rc, Zc, dR, dZ = map(float, val[:4])
+                pts.append(np.array([
+                    [Rc - dR, Zc - dZ],
+                    [Rc + dR, Zc + dZ],
+                ], dtype=float))
+            except Exception:
+                continue
+
+    if include_passives:
+        for ps in geom.get("passive_structures", []) or []:
+            try:
+                xy = np.asarray(ps.get("xy"), dtype=float)
+                if xy.ndim == 2 and xy.shape[1] >= 2 and xy.shape[0] >= 3:
+                    pts.append(xy[:, :2])
+            except Exception:
+                pass
+
+        for item in geom.get("passive_filaments", []) or []:
+            try:
+                # (lab, Rc, Zc, dR, dZ, material, resistivity)
+                _lab, Rc, Zc, dR, dZ = item[:5]
+                Rc = float(Rc); Zc = float(Zc); dR = float(dR); dZ = float(dZ)
+                pts.append(np.array([
+                    [Rc - dR, Zc - dZ],
+                    [Rc + dR, Zc + dZ],
+                ], dtype=float))
+            except Exception:
+                continue
+
+    if not pts:
+        return (0.6, 8.0, -7.0, 7.0)
+
+    P = np.vstack(pts)
+    P = P[np.all(np.isfinite(P), axis=1)]
+    if P.size == 0:
+        return (0.6, 8.0, -7.0, 7.0)
+
+    return float(np.min(P[:, 0])), float(np.max(P[:, 0])), float(np.min(P[:, 1])), float(np.max(P[:, 1]))
+
+
+def _domain_from_geom(geom: Dict[str, Any], *, margin: float, source: str = "machine") -> Tuple[float, float, float, float]:
+    """
+    source:
+      - "blanket" / "outer": old behavior, based on WALL_OUTER only.
+      - "limiter" / "inner": based on WALL_INNER only.
+      - "machine" / "all": based on walls + active coils + passives.
+    """
+    src = str(source).strip().lower()
+
+    if src in ("blanket", "outer", "wall_outer"):
+        R = np.asarray(geom["R_outer"], dtype=float)
+        Z = np.asarray(geom["Z_outer"], dtype=float)
+        Rmin_raw = float(np.nanmin(R) - margin)
+        Rmax = float(np.nanmax(R) + margin)
+        Zmin = float(np.nanmin(Z) - margin)
+        Zmax = float(np.nanmax(Z) + margin)
+
+    elif src in ("limiter", "inner", "wall_inner") and ("R_inner" in geom and "Z_inner" in geom):
+        R = np.asarray(geom["R_inner"], dtype=float)
+        Z = np.asarray(geom["Z_inner"], dtype=float)
+        Rmin_raw = float(np.nanmin(R) - margin)
+        Rmax = float(np.nanmax(R) + margin)
+        Zmin = float(np.nanmin(Z) - margin)
+        Zmax = float(np.nanmax(Z) + margin)
+
+    else:
+        Rmin0, Rmax0, Zmin0, Zmax0 = _machine_geometry_bbox(geom, include_coils=True, include_passives=True)
+        Rmin_raw = Rmin0 - margin
+        Rmax = Rmax0 + margin
+        Zmin = Zmin0 - margin
+        Zmax = Zmax0 + margin
+
+    Rmin = max(0.05, float(Rmin_raw))
+    return float(Rmin), float(Rmax), float(Zmin), float(Zmax)
+
+
+def _plot_rect_outline(ax, Rc: float, Zc: float, dR: float, dZ: float, **kwargs) -> None:
+    x0, x1 = Rc - dR, Rc + dR
+    y0, y1 = Zc - dZ, Zc + dZ
+    ax.plot([x0, x1, x1, x0, x0], [y0, y0, y1, y1, y0], **kwargs)
+
+
+def _family_from_label(label: str) -> str:
+    s = str(label).upper()
+    if s.startswith("CS"):
+        return "CS"
+    for fam in ("PF1", "PF2", "PF3", "PF4", "PF5", "PF6"):
+        if s.startswith(fam):
+            return fam
+    if s.startswith("PASSIVE") or s.startswith("STAR_VESSEL") or s.startswith("SV"):
+        return "PASSIVE"
+    return "OTHER"
+
+
+def _plot_machine_cad_overlay(ax, geom: Dict[str, Any]) -> None:
+    """
+    Overlay MAST-U-like machine semantics:
+      - passive structures/polygons
+      - active coils
+      - WALL_OUTER blanket back plate
+      - WALL_INNER first wall/limiter
+      - optional plasma target
+    """
+    # Passive solid polygons first, under everything else.
+    passive_structs = geom.get("passive_structures", []) or []
+    passive_poly_label_done = False
+    for ps in passive_structs:
+        try:
+            xy = np.asarray(ps.get("xy"), float)
+            if xy.ndim == 2 and xy.shape[0] >= 3:
+                ax.fill(
+                    xy[:, 0], xy[:, 1],
+                    facecolor="0.75", edgecolor="0.35",
+                    alpha=0.28, linewidth=0.35,
+                    label="STAR_VESSEL passive structures" if not passive_poly_label_done else None,
+                    zorder=0.5,
+                )
+                passive_poly_label_done = True
+        except Exception:
+            continue
+
+    # Optional passive filament centers/rectangles. Full rectangles can be visually heavy.
+    plot_passive_filaments = bool(getattr(cfg, "plot_passive_filaments", False))
+    passive_filaments = geom.get("passive_filaments", []) or []
+    if passive_filaments and plot_passive_filaments:
+        max_passive_plot = int(getattr(cfg, "max_passive_filaments_plot", 1200))
+        step = max(1, int(np.ceil(len(passive_filaments) / max_passive_plot)))
+        label_done = False
+        for item in passive_filaments[::step]:
+            try:
+                _lab, Rc, Zc, dR, dZ = item[:5]
+                _plot_rect_outline(
+                    ax, float(Rc), float(Zc), float(dR), float(dZ),
+                    color="0.45", lw=0.20, alpha=0.30,
+                    label="passive filaments" if not label_done else None,
+                    zorder=0.7,
+                )
+                label_done = True
+            except Exception:
+                continue
+
+    # Active coils: plot filament rectangles thinly, grouped by family color.
+    fam_styles = {
+        "CS":  dict(color="tab:red",    lw=0.22, alpha=0.75),
+        "PF1": dict(color="tab:blue",   lw=0.25, alpha=0.80),
+        "PF2": dict(color="tab:orange", lw=0.25, alpha=0.80),
+        "PF3": dict(color="tab:green",  lw=0.25, alpha=0.80),
+        "PF4": dict(color="tab:purple", lw=0.25, alpha=0.80),
+        "PF5": dict(color="tab:brown",  lw=0.25, alpha=0.80),
+        "PF6": dict(color="tab:pink",   lw=0.25, alpha=0.80),
+        "OTHER": dict(color="0.25",     lw=0.20, alpha=0.60),
+    }
+    label_done_by_fam: Dict[str, bool] = {}
+    for lab, val in (geom.get("coils", {}) or {}).items():
+        try:
+            Rc, Zc, dR, dZ = map(float, val[:4])
+        except Exception:
+            continue
+        fam = _family_from_label(str(lab))
+        style = fam_styles.get(fam, fam_styles["OTHER"])
+        _plot_rect_outline(
+            ax, Rc, Zc, dR, dZ,
+            **style,
+            label=f"{fam} active" if not label_done_by_fam.get(fam, False) else None,
+            zorder=1.5,
+        )
+        label_done_by_fam[fam] = True
+
+    # Walls / blanket / limiter.
+    if "R_outer" in geom and "Z_outer" in geom:
+        ax.plot(
+            geom["R_outer"], geom["Z_outer"],
+            color="0.15", lw=2.0, ls="-",
+            label="WALL_OUTER / blanket outer",
+            zorder=2.5,
+        )
+
+    if "R_inner" in geom and "Z_inner" in geom:
+        ax.plot(
+            geom["R_inner"], geom["Z_inner"],
+            color="k", lw=1.8, ls="--",
+            label="WALL_INNER / limiter",
+            zorder=2.8,
+        )
+
+    # # Plasma target if present.
+    # if "R_plasma" in geom and "Z_plasma" in geom:
+    #     ax.plot(
+    #         geom["R_plasma"], geom["Z_plasma"],
+    #         color="tab:cyan", lw=1.4, alpha=0.8,
+    #         label="CAD/AUTO plasma target",
+    #         zorder=2.0,
+    #     )
+    #
+
 # -------------------------
 # Main equilibrium build
 # -------------------------
@@ -646,17 +875,30 @@ def build_equilibrium(
     if dxf_path is None:
         dxf_path = str(getattr(cfg, "dxf_path", _default_dxf()))
 
-    # Build CAD opts FROM CONFIG (includes blanket)
+    # Build CAD opts FROM CONFIG.
+    #
+    # MAST-U-like semantic setup:
+    #   COIL_*      -> active coils
+    #   STAR_VESSEL -> passive metallic structures
+    #   WALL_INNER  -> first wall / limiter / plasma-accessible boundary
+    #   WALL_OUTER  -> blanket outer/back plate
+    #
+    # Legacy artificial blanket fill stays disabled unless explicitly enabled in cfg.
     opts = CADImportOptions(
         unit_scale=getattr(cfg, "unit_scale", None),
         resample_walls=str(getattr(cfg, "resample_walls", "auto")),
-        n_wall=int(getattr(cfg, "n_wall", 801)),
-        n_inner=int(getattr(cfg, "n_inner", 801)),
-        n_plasma=int(getattr(cfg, "n_plasma", 320)),
-        min_wall_pts=int(getattr(cfg, "min_wall_pts", 200)),
+        n_wall=int(getattr(cfg, "n_wall", 1601)),
+        n_inner=int(getattr(cfg, "n_inner", 2001)),
+        n_plasma=int(getattr(cfg, "n_plasma", 501)),
+        min_wall_pts=int(getattr(cfg, "min_wall_pts", 400)),
         enforce_ccw=bool(getattr(cfg, "enforce_ccw", True)),
         canonical_start=bool(getattr(cfg, "canonical_start", True)),
-        flatten_distance=float(getattr(cfg, "flatten_distance", 0.01)),
+
+        prefer_path_flattening=bool(getattr(cfg, "prefer_path_flattening", True)),
+        flatten_distance=float(getattr(cfg, "flatten_distance", 0.002)),
+        max_seg_len_wall=float(getattr(cfg, "max_seg_len_wall", 0.008)),
+        max_seg_len_plasma=float(getattr(cfg, "max_seg_len_plasma", 0.008)),
+
         label_match_factor=float(getattr(cfg, "label_match_factor", 2.0)),
 
         plasma_target_mode=str(getattr(cfg, "plasma_target_mode", "auto")),
@@ -676,11 +918,12 @@ def build_equilibrium(
         center_search_seed=int(getattr(cfg, "center_search_seed", 0)),
         strike_ray_fallback_len=float(getattr(cfg, "strike_ray_fallback_len", 3.0)),
 
+        # Legacy blanket fill: keep OFF for the new CAD architecture.
         blanket_enabled=bool(getattr(cfg, "blanket_enabled", False)),
         blanket_n_filaments=int(getattr(cfg, "blanket_n_filaments", 0)),
         blanket_distribution=str(getattr(cfg, "blanket_distribution", "stratified")),
         blanket_seed=int(getattr(cfg, "blanket_seed", 0)),
-        blanket_wall_margin_m=float(getattr(cfg, "blanket_wall_margin_m", 0.0)),
+        blanket_wall_margin_m=float(getattr(cfg, "blanket_wall_margin_m", 0.01)),
         blanket_filament_dR=float(getattr(cfg, "blanket_filament_dR", 0.004)),
         blanket_filament_dZ=float(getattr(cfg, "blanket_filament_dZ", 0.004)),
         blanket_bins_R=int(getattr(cfg, "blanket_bins_R", 0)),
@@ -690,6 +933,49 @@ def build_equilibrium(
         blanket_pitch_Z=float(getattr(cfg, "blanket_pitch_Z", 0.03)),
         blanket_label_prefix=str(getattr(cfg, "blanket_label_prefix", "BLK")),
         blanket_containment_radius=float(getattr(cfg, "blanket_containment_radius", -1e-9)),
+
+        # New preferred passive model: STAR_VESSEL/PASSIVE_* polygons.
+        passive_structures_enabled=bool(getattr(cfg, "passive_structures_enabled", True)),
+        passive_use_star_vessel=bool(getattr(cfg, "passive_use_star_vessel", True)),
+        passive_use_passive_prefix=bool(getattr(cfg, "passive_use_passive_prefix", True)),
+        passive_target_dR_m=float(getattr(cfg, "passive_target_dR_m", 0.10)),
+        passive_target_dZ_m=float(getattr(cfg, "passive_target_dZ_m", 0.10)),
+        passive_nR_max=int(getattr(cfg, "passive_nR_max", 80)),
+        passive_nZ_max=int(getattr(cfg, "passive_nZ_max", 160)),
+        passive_min_cell_area_m2=float(getattr(cfg, "passive_min_cell_area_m2", 1.0e-6)),
+        passive_containment_radius=float(getattr(cfg, "passive_containment_radius", -1e-9)),
+        star_vessel_material=str(getattr(cfg, "star_vessel_material", "SS316L")),
+        star_vessel_resistivity_ohm_m=float(getattr(cfg, "star_vessel_resistivity_ohm_m", 0.75e-6)),
+        passive_default_material=str(getattr(cfg, "passive_default_material", "SS316L")),
+        passive_default_resistivity_ohm_m=float(getattr(cfg, "passive_default_resistivity_ohm_m", 0.75e-6)),
+        first_wall_material=str(getattr(cfg, "first_wall_material", "EUROFER97")),
+        first_wall_resistivity_ohm_m=float(getattr(cfg, "first_wall_resistivity_ohm_m", 1.0e-6)),
+        blanket_outer_material=str(getattr(cfg, "blanket_outer_material", "EUROFER97")),
+        blanket_outer_resistivity_ohm_m=float(getattr(cfg, "blanket_outer_resistivity_ohm_m", 1.0e-6)),
+        machine_wall_source=str(getattr(cfg, "machine_wall_source", "outer")),
+        limiter_source=str(getattr(cfg, "limiter_source", "inner")),
+
+        # Active coil discretization.
+        coil_discretize_active=bool(getattr(cfg, "coil_discretize_active", True)),
+        coil_target_dR_m=float(getattr(cfg, "coil_target_dR_m", 0.12)),
+        coil_target_dZ_m=float(getattr(cfg, "coil_target_dZ_m", 0.12)),
+        coil_target_dR_CS_m=float(getattr(cfg, "coil_target_dR_CS_m", 0.08)),
+        coil_target_dZ_CS_m=float(getattr(cfg, "coil_target_dZ_CS_m", 0.18)),
+        coil_nR_min=int(getattr(cfg, "coil_nR_min", 2)),
+        coil_nZ_min=int(getattr(cfg, "coil_nZ_min", 2)),
+        coil_nR_max=int(getattr(cfg, "coil_nR_max", 8)),
+        coil_nZ_max=int(getattr(cfg, "coil_nZ_max", 48)),
+
+        # Segmented CS groups for shaping sensitivity.
+        cs_segmented=bool(getattr(cfg, "cs_segmented", True)),
+        cs_mid_fraction=float(getattr(cfg, "cs_mid_fraction", 0.45)),
+        cs_segment_zcut_m=getattr(cfg, "cs_segment_zcut_m", None),
+        cs_segment_keep_parent=bool(getattr(cfg, "cs_segment_keep_parent", True)),
+
+        fill_factor=float(getattr(cfg, "fill_factor", 0.75)),
+        Jeng_default_A_per_mm2=float(getattr(cfg, "Jeng_default_A_per_mm2", 40.0)),
+        family_mode=str(getattr(cfg, "family_mode", "min")),
+        family_J_override_A_per_mm2=getattr(cfg, "family_J_override_A_per_mm2", None),
     )
 
     tokamak, geom = make_star_machine_from_cad(
@@ -700,14 +986,13 @@ def build_equilibrium(
     )
 
     # Domain
-    R_outer = np.asarray(geom["R_outer"], dtype=float)
-    Z_outer = np.asarray(geom["Z_outer"], dtype=float)
+    #
+    # New default: include the full CAD machine (active coils + STAR_VESSEL passives)
+    # instead of only WALL_OUTER. This is closer to the MAST-U-like setup where
+    # active coils, passive structures, limiter and wall are all represented.
     margin = float(getattr(cfg, "margin_RZ", 0.5))
-    Rmin_raw = float(R_outer.min() - margin)
-    Rmin = max(0.05, Rmin_raw)          # 5 cm de margen mínimo > 0
-    Rmax = float(R_outer.max() + margin)
-    Zmin = float(Z_outer.min() - margin)
-    Zmax = float(Z_outer.max() + margin)
+    domain_source = str(getattr(cfg, "eq_domain_source", "outer")) #machine outer
+    Rmin, Rmax, Zmin, Zmax = _domain_from_geom(geom, margin=margin, source=domain_source)
 
     eq = equilibrium_update.Equilibrium(
         tokamak=tokamak,
@@ -742,8 +1027,19 @@ def build_equilibrium(
         print(f"Grid nx={getattr(cfg, 'nx_eq', 65)} ny={getattr(cfg, 'ny_eq', 129)}")
         print(f"coil_group_mode = {mode}")
         print(f"vacuum_only = {vacuum_only}  (Ip={Ip_set}  paxis={paxis_set})")
+        print(f"domain_source = {domain_source}")
+        print(f"active_coils = {len(getattr(tokamak, 'active_coils', []) or [])}")
+        print(f"passive_coils = {len(getattr(tokamak, 'passive_coils', []) or [])}")
+        if "geometry_semantics" in geom:
+            print(f"[GEOM] {geom['geometry_semantics']}")
+        if "materials_meta" in geom:
+            print(f"[MATERIALS] {geom['materials_meta']}")
+        if "passive_meta" in geom:
+            print(f"[PASSIVE] {geom['passive_meta']}")
         if "blanket_meta" in geom:
-            print(f"[BLANKET] {geom['blanket_meta']}")
+            print(f"[BLANKET legacy] {geom['blanket_meta']}")
+        if "blanket_region" in geom:
+            print(f"[BLANKET region] {geom['blanket_region']}")
 
     for j, f in enumerate(f_list, start=1):
         this_tol = tol_final if (j == len(f_list)) else tol_ramp
@@ -886,105 +1182,152 @@ def _iter_blanket_rects(geom: Dict[str, Any]) -> Iterator[Tuple[float, float, fl
 
 
 def plot_equilibrium(eq: Any, geom: Dict[str, Any], shape: Dict[str, Any], filename: Optional[str] = None) -> None:
-    fig, ax = plt.subplots(figsize=(6, 10))
+    """
+    Plot equilibrium + full CAD machine context.
 
-    # freegsnke plot (may warn about separatrix; that’s ok)
+    This is intentionally MAST-U-like:
+      - active coils are visible
+      - STAR_VESSEL passive structures are visible
+      - WALL_INNER is the limiter/first wall
+      - WALL_OUTER is the blanket outer/back plate
+      - LCFS/separatrix is overlaid
+    """
+    fig, ax = plt.subplots(figsize=(7.2, 10.5))
+
+    # FreeGSNKE psi contours. This only covers the equilibrium computational domain.
     _safe_eq_plot(eq, ax)
 
-    ax.plot(geom["R_outer"], geom["Z_outer"], "k", lw=2, label="Outer wall")
-    if "R_inner" in geom and "Z_inner" in geom:
-        ax.plot(geom["R_inner"], geom["Z_inner"], "k--", lw=1.5, label="Inner wall")
+    # Full CAD overlay.
+    _plot_machine_cad_overlay(ax, geom)
 
-    # blanket filaments (robust)
-    for (Rc, Zc, dR, dZ) in _iter_blanket_rects(geom):
-        x0, x1 = Rc - dR, Rc + dR
-        y0, y1 = Zc - dZ, Zc + dZ
-        ax.plot([x0, x1, x1, x0, x0], [y0, y0, y1, y1, y0], lw=0.15)
-
-    # LCFS/separatrix from analyze_star if present
+    # LCFS/separatrix from analyze_star if present.
     plotted = False
     R_sep = shape.get("R_sep", None)
     Z_sep = shape.get("Z_sep", None)
-    if R_sep is not None and Z_sep is not None and len(R_sep) > 10:
-        ax.plot(R_sep, Z_sep, lw=2.2, label="LCFS/Separatrix")
-        plotted = True
+    if R_sep is not None and Z_sep is not None:
+        try:
+            if len(R_sep) > 10 and len(Z_sep) == len(R_sep):
+                ax.plot(R_sep, Z_sep, color="tab:blue", lw=2.6, label="LCFS/Separatrix", zorder=4.0)
+                plotted = True
+        except Exception:
+            pass
 
-    # NEW: If no separatrix, plot fallback LCFS that encloses axis (if available)
+    # If no analyze_star separatrix, plot diagnostic LCFS fallback.
     if not plotted:
         diag = (shape.get("plasma_diag", None) or {})
         Rf = diag.get("R_lcfs", None)
         Zf = diag.get("Z_lcfs", None)
-        if Rf is not None and Zf is not None and len(Rf) > 20:
-            ax.plot(Rf, Zf, lw=2.0, label=f"LCFS fallback ({diag.get('method','?')})")
+        try:
+            if Rf is not None and Zf is not None and len(Rf) > 20:
+                ax.plot(
+                    Rf, Zf,
+                    color="tab:blue", lw=2.2,
+                    label=f"LCFS fallback ({diag.get('method','?')})",
+                    zorder=4.0,
+                )
+        except Exception:
+            pass
+
+    # Magnetic axis if available.
+    diag = (shape.get("plasma_diag", None) or {})
+    try:
+        Rax = float(diag.get("R_ax", shape.get("R_ax", np.nan)))
+        Zax = float(diag.get("Z_ax", shape.get("Z_ax", np.nan)))
+        if np.isfinite(Rax) and np.isfinite(Zax):
+            ax.plot(Rax, Zax, "x", ms=8, mew=2, color="tab:green", label="Magnetic axis", zorder=5.0)
+    except Exception:
+        pass
+
+    # X-points if analyze_star found them.
+    for key, label in (("xpoints", "Detected X-points"), ("x_points", "Detected X-points")):
+        xs = shape.get(key, None)
+        if xs:
+            done = False
+            for p in xs:
+                try:
+                    if isinstance(p, dict):
+                        xr, xz = float(p.get("R", p.get("r"))), float(p.get("Z", p.get("z")))
+                    else:
+                        xr, xz = float(p[0]), float(p[1])
+                    ax.plot(xr, xz, marker="x", ms=7, mew=1.8, color="red", ls="", label=label if not done else None, zorder=5.0)
+                    done = True
+                except Exception:
+                    pass
+            break
+
+    # Use full machine bbox for view so coils/passives are visible.
+    Rmin0, Rmax0, Zmin0, Zmax0 = _machine_geometry_bbox(geom, include_coils=True, include_passives=True)
+    pad_R = float(getattr(cfg, "plot_pad_R", 0.35))
+    pad_Z = float(getattr(cfg, "plot_pad_Z", 0.35))
+    ax.set_xlim(max(0.0, Rmin0 - pad_R), Rmax0 + pad_R)
+    ax.set_ylim(Zmin0 - pad_Z, Zmax0 + pad_Z)
 
     ax.set_aspect("equal")
     ax.set_xlabel("R [m]")
     ax.set_ylabel("Z [m]")
-    ax.set_title("STAR-like equilibrium")
-    ax.legend(loc="upper right")
+    ax.set_title("STAR-like equilibrium: active coils + passive structures + limiter/wall")
+
+    # Reduce duplicate legend entries.
+    handles, labels = ax.get_legend_handles_labels()
+    seen = set()
+    handles2, labels2 = [], []
+    for h, lab in zip(handles, labels):
+        if not lab or lab in seen:
+            continue
+        seen.add(lab)
+        handles2.append(h)
+        labels2.append(lab)
+    ax.legend(handles2, labels2, loc="upper right", fontsize=8)
+
     fig.tight_layout()
 
     if filename is None:
         filename = str(getattr(cfg, "fig_equilibrium", "STAR_bean_equilibrium.png"))
     out = _results_dir() / filename
-    fig.savefig(out, dpi=200, bbox_inches="tight")
+    fig.savefig(out, dpi=220, bbox_inches="tight")
+    print(f"[SAVED] {out}")
+
+
+def plot_machine_setup(geom: Dict[str, Any], filename: str = "STAR_machine_setup.png") -> None:
+    """
+    CAD-only plot for checking the imported machine semantics without solving an equilibrium.
+    """
+    fig, ax = plt.subplots(figsize=(7.2, 10.5))
+    _plot_machine_cad_overlay(ax, geom)
+
+    Rmin0, Rmax0, Zmin0, Zmax0 = _machine_geometry_bbox(geom, include_coils=True, include_passives=True)
+    pad_R = float(getattr(cfg, "plot_pad_R", 0.35))
+    pad_Z = float(getattr(cfg, "plot_pad_Z", 0.35))
+    ax.set_xlim(max(0.0, Rmin0 - pad_R), Rmax0 + pad_R)
+    ax.set_ylim(Zmin0 - pad_Z, Zmax0 + pad_Z)
+    ax.set_aspect("equal")
+    ax.set_xlabel("R [m]")
+    ax.set_ylabel("Z [m]")
+    ax.set_title("STAR CAD machine setup")
+
+    handles, labels = ax.get_legend_handles_labels()
+    seen = set()
+    handles2, labels2 = [], []
+    for h, lab in zip(handles, labels):
+        if not lab or lab in seen:
+            continue
+        seen.add(lab)
+        handles2.append(h)
+        labels2.append(lab)
+    ax.legend(handles2, labels2, loc="upper right", fontsize=8)
+    fig.tight_layout()
+    out = _results_dir() / filename
+    fig.savefig(out, dpi=220, bbox_inches="tight")
     print(f"[SAVED] {out}")
 
 
 def main():
     eq, tokamak, geom, shape = build_equilibrium(verbose=True, redirect_solver_noise=True)
-    from separatrix_fallback_freegs import extract_freegs_psibndry_contours
 
-    from separatrix_fallback_freegs import extract_freegs_dn_lcfs
-
-    # Quick check manual: cambia estos valores si tus X-points reales están ligeramente diferentes.
-    # Para el caso de tu figura parecen aprox:
-    xpoints_for_fallback = [
-        (3.0, 4.5),
-        (3.0, -4.5),
-    ]
-
-    fb = extract_freegs_dn_lcfs(
-        eq,
-        xpoints=xpoints_for_fallback,
-        debug_plot=r".\results\debug_freegs_dn_lcfs.png",
-        xpoint_tol=0.75,
-    )
-
-    print("\n--- FreeGS DN fallback quick check ---")
-    print("ok        =", fb.get("ok"))
-    print("source    =", fb.get("source"))
-    print("reason    =", fb.get("reason"))
-    print("usable    =", fb.get("has_usable_sep"))
-    print("true      =", fb.get("has_true_sep"))
-    print("nseg      =", len(fb.get("segments", [])))
-    print("selected  =", fb.get("selected_idx"))
-    print("xpt_upper =", fb.get("xpt_upper_used"))
-    print("xpt_lower =", fb.get("xpt_lower_used"))
-    print("dn_failed =", fb.get("dn_reconstruction_failed"))
-    print("plot      = .\\results\\debug_freegs_dn_lcfs.png")
-
-    if fb.get("ok") and "R_sep" in fb and "Z_sep" in fb:
-        Rfb = np.asarray(fb["R_sep"])
-        Zfb = np.asarray(fb["Z_sep"])
-        print("R_sep range =", float(np.nanmin(Rfb)), float(np.nanmax(Rfb)))
-        print("Z_sep range =", float(np.nanmin(Zfb)), float(np.nanmax(Zfb)))
-        print("n R_sep     =", len(Rfb))    
+    if bool(getattr(cfg, "plot_machine_setup", True)):
+        plot_machine_setup(geom, filename=str(getattr(cfg, "fig_machine_setup", "STAR_machine_setup.png")))
 
     plot_equilibrium(eq, geom, shape, filename=str(getattr(cfg, "fig_equilibrium", "STAR_bean_equilibrium.png")))
-
-    print("\n--- DN fallback geometry ---")
-    geom = fb.get("geometry", {})
-    print("geom ok  =", geom.get("ok"))
-    print("R0       =", geom.get("R0"))
-    print("a        =", geom.get("a"))
-    print("A        =", geom.get("A"))
-    print("kappa    =", geom.get("kappa"))
-    print("delta_u  =", geom.get("delta_u"))
-    print("delta_l  =", geom.get("delta_l"))
-    print("delta_bar=", geom.get("delta_bar"))
-    print("area     =", geom.get("area"))
-    print("bounds   =", geom.get("bounds"))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,154 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20260520004310
+Username: H4XTER\conej
+RunAs User: H4XTER\conej
+Configuration Name: 
+Machine: H4XTER (Microsoft Windows NT 10.0.26200.0)
+Host Application: C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
+Process ID: 23812
+PSVersion: 5.1.26100.8457
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.8457
+BuildVersion: 10.0.26100.8457
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+Transcript started, output file is .\results\overnight_dn_dshape_csseg_20260520_004310\overnight_log.txt
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\fit_simplified_dn_dshape_first.py --target .\results\targets\star_simplified_dn_target.json --seed .\results\seeds\rigurous_seed_0.json --stage release-cs --iters 15 --pop 24 --workers 10 --timeout 180 --widen 0.025 --sigma-frac 0.040 --free-keys CS_MID,CS_END,PF1,PF2,PF3,PF4,PF5,PF6 --no-early-stop --dxf .\star_baseline.dxf --dshape-weight 0.65 --inboard-weight 65 --target-rms-weight 12 --delta-weight 24 --delta-target 0.42 --kappa-min 2.00 --A-min 1.58 --chamfer-max-m 0.34
+[ITER 003] batch_best=433.818 global_best=433.818          | ok=21/24 sep=15/24 | A=1.588 k=1.981 d=0.367 Rax=4.074 CS=+0.000 MA | 220.8s
+[ITER 004] batch_best=414.445 global_best=414.445 IMPROVED | ok=16/24 sep=10/24 | A=1.607 k=2.015 d=0.386 Rax=4.074 CS=+0.000 MA | 341.5s
+[ITER 005] batch_best=410.23 global_best=410.23 IMPROVED | ok=18/24 sep=9/24 | A=1.612 k=2.018 d=0.387 Rax=4.074 CS=+0.000 MA | 361.3s
+[ITER 006] batch_best=410.174 global_best=410.174 IMPROVED | ok=22/24 sep=10/24 | A=1.612 k=2.018 d=0.387 Rax=4.074 CS=+0.000 MA | 227.5s
+[ITER 007] batch_best=410.139 global_best=410.139 IMPROVED | ok=15/24 sep=7/24 | A=1.612 k=2.018 d=0.387 Rax=4.074 CS=+0.000 MA | 361.0s
+[ITER 008] batch_best=410.126 global_best=410.126 IMPROVED | ok=17/24 sep=9/24 | A=1.612 k=2.018 d=0.387 Rax=4.074 CS=+0.000 MA | 318.8s
+[ITER 009] batch_best=410.161 global_best=410.126          | ok=20/24 sep=9/24 | A=1.612 k=2.018 d=0.387 Rax=4.074 CS=+0.000 MA | 317.3s
+[ITER 010] batch_best=410.139 global_best=410.126          | ok=19/24 sep=6/24 | A=1.612 k=2.018 d=0.387 Rax=4.074 CS=+0.000 MA | 345.0s
+[ITER 011] batch_best=410.139 global_best=410.126          | ok=17/24 sep=9/24 | A=1.612 k=2.018 d=0.387 Rax=4.074 CS=+0.000 MA | 328.9s
+[ITER 012] batch_best=410.17 global_best=410.126          | ok=20/24 sep=9/24 | A=1.612 k=2.018 d=0.387 Rax=4.074 CS=+0.000 MA | 270.4s
+[ITER 013] batch_best=410.171 global_best=410.126          | ok=18/24 sep=8/24 | A=1.612 k=2.018 d=0.387 Rax=4.074 CS=+0.000 MA | 298.4s
+[ITER 014] batch_best=410.134 global_best=410.126          | ok=21/24 sep=13/24 | A=1.612 k=2.018 d=0.387 Rax=4.074 CS=+0.000 MA | 210.6s
+[ITER 015] batch_best=410.139 global_best=410.126          | ok=16/24 sep=6/24 | A=1.612 k=2.018 d=0.387 Rax=4.074 CS=+0.000 MA | 374.1s
+
+[OK] finished
+[OK] best score: 410.126
+[OK] best currents [MA]: CS=+0.000, CS_MID=-3.730, CS_END=-2.136, PF1=-1.848, PF2=-2.822, PF3=+1.688, PF4=+5.240, PF5=+5.004, PF6=+10.973
+[OK] best json: C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts\results\fit_simplified_dn_toposafe_best.json
+[OK] run json : C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts\results\fit_simplified_dn_toposafe_run_20260520
+_004310.json
+[OK] log jsonl: C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts\results\fit_simplified_dn_toposafe_results.json
+l
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) Copy-Item .\results\fit_simplified_dn_dshape_first_best.json "$OUTDIR\A_dshape_stabilize_best.json" -Force
+Copy-Item : Cannot find path 'C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscrip
+ts\results\fit_simplified_dn_dshape_first_best.json' because it does not exist.
+At line:1 char:1
++ Copy-Item .\results\fit_simplified_dn_dshape_first_best.json "$OUTDIR ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\conej\...first_best.json:String) [Copy-Item], 
+ItemNotFoundException
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.CopyItemCommand
+Copy-Item : Cannot find path
+'C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts\results\fit_simplified_dn_dshape_first_best.json' because it
+does not exist.
+At line:1 char:1
++ Copy-Item .\results\fit_simplified_dn_dshape_first_best.json "$OUTDIR ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\conej\...first_best.json:String) [Copy-Item], ItemNotFoundException
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.CopyItemCommand
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) Copy-Item .\results\fit_simplified_dn_dshape_first_results.jsonl "$OUTDIR\A_dshape_stabilize_results.jsonl" -Force
+Copy-Item : Cannot find path 'C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscrip
+ts\results\fit_simplified_dn_dshape_first_results.jsonl' because it does not exist.
+At line:1 char:1
++ Copy-Item .\results\fit_simplified_dn_dshape_first_results.jsonl "$OU ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\conej\...t_results.jsonl:String) [Copy-Item], 
+ItemNotFoundException
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.CopyItemCommand
+Copy-Item : Cannot find path
+'C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts\results\fit_simplified_dn_dshape_first_results.jsonl'
+because it does not exist.
+At line:1 char:1
++ Copy-Item .\results\fit_simplified_dn_dshape_first_results.jsonl "$OU ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\conej\...t_results.jsonl:String) [Copy-Item], ItemNotFoundException
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.CopyItemCommand
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\fit_simplified_dn_dshape_first.py --target .\results\targets\star_simplified_dn_target.json --seed "$OUTDIR\A_dshape_stabilize_best.json" --stage release-cs --iters 18 --pop 28 --workers 10 --timeout 180 --widen 0.018 --sigma-frac 0.030 --free-keys CS_MID,CS_END,PF1,PF2,PF3,PF4,PF5,PF6 --no-early-stop --dxf .\star_baseline.dxf --dshape-weight 0.80 --inboard-weight 75 --target-rms-weight 16 --delta-weight 32 --delta-target 0.44 --kappa-min 2.05 --A-min 1.62 --chamfer-max-m 0.32
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) Copy-Item .\results\fit_simplified_dn_dshape_first_best.json "$OUTDIR\B_dshape_refine_best.json" -Force
+Copy-Item : Cannot find path 'C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscrip
+ts\results\fit_simplified_dn_dshape_first_best.json' because it does not exist.
+At line:1 char:1
++ Copy-Item .\results\fit_simplified_dn_dshape_first_best.json "$OUTDIR ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\conej\...first_best.json:String) [Copy-Item], 
+ItemNotFoundException
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.CopyItemCommand
+Copy-Item : Cannot find path
+'C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts\results\fit_simplified_dn_dshape_first_best.json' because it
+does not exist.
+At line:1 char:1
++ Copy-Item .\results\fit_simplified_dn_dshape_first_best.json "$OUTDIR ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\conej\...first_best.json:String) [Copy-Item], ItemNotFoundException
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.CopyItemCommand
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) Copy-Item .\results\fit_simplified_dn_dshape_first_results.jsonl "$OUTDIR\B_dshape_refine_results.jsonl" -Force
+Copy-Item : Cannot find path 'C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscrip
+ts\results\fit_simplified_dn_dshape_first_results.jsonl' because it does not exist.
+At line:1 char:1
++ Copy-Item .\results\fit_simplified_dn_dshape_first_results.jsonl "$OU ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\conej\...t_results.jsonl:String) [Copy-Item], 
+ItemNotFoundException
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.CopyItemCommand
+Copy-Item : Cannot find path
+'C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts\results\fit_simplified_dn_dshape_first_results.jsonl'
+because it does not exist.
+At line:1 char:1
++ Copy-Item .\results\fit_simplified_dn_dshape_first_results.jsonl "$OU ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\conej\...t_results.jsonl:String) [Copy-Item], ItemNotFoundException
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.CopyItemCommand
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\fit_simplified_dn_divertor_first.py --target .\results\targets\star_simplified_dn_target.json --seed "$OUTDIR\B_dshape_refine_best.json" --stage release-cs --iters 16 --pop 28 --workers 10 --timeout 180 --widen 0.015 --sigma-frac 0.025 --free-keys CS_MID,CS_END,PF1,PF2,PF3,PF4,PF5,PF6 --dxf .\star_baseline.dxf --strike-in-weight 5.0 --strike-out-weight 0.35 --strike-max-weight 5.0 --leg-weight 0.8 --leg-sigma 0.30 --shape-weight 0.90 --min-A-soft 1.58 --min-kappa-soft 2.00 --max-chamfer-soft 0.36 --current-reg-weight 0.35
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) Copy-Item .\results\fit_simplified_dn_divertor_first_best.json "$OUTDIR\C_divertor_refine_best.json" -Force
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) Copy-Item .\results\fit_simplified_dn_divertor_first_results.jsonl "$OUTDIR\C_divertor_refine_results.jsonl" -Force
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\plot_fit_best_case.py --json "$OUTDIR\A_dshape_stabilize_best.json" --target .\results\targets\star_simplified_dn_target.json --dxf .\star_baseline.dxf
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\plot_fit_best_case.py --json "$OUTDIR\B_dshape_refine_best.json" --target .\results\targets\star_simplified_dn_target.json --dxf .\star_baseline.dxf
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) py .\plot_fit_best_case.py --json "$OUTDIR\C_divertor_refine_best.json" --target .\results\targets\star_simplified_dn_target.json --dxf .\star_baseline.dxf
+
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+PS C:\Users\conej\Documents\Fusion\EPFL\Simulations\Git\STAR-like-tokamak-equilibrium\pyscripts>
+(fusion) Stop-Transcript
+**********************
+Windows PowerShell transcript end
+End time: 20260520020100
+**********************
