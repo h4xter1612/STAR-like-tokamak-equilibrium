@@ -51,6 +51,7 @@ import argparse
 import json
 import math
 import multiprocessing as mp
+import os
 import random
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -150,6 +151,17 @@ def _safe_float(x: Any, default: float = float("nan")) -> float:
         return float(default)
 
 
+def _env_float(name: str, default: float) -> float:
+    """Read a float from environment without breaking old workflows."""
+    try:
+        val = os.environ.get(name, None)
+        if val is None or str(val).strip() == "":
+            return float(default)
+        return float(val)
+    except Exception:
+        return float(default)
+
+
 def _currents_A_to_MA(curr_A: Dict[str, float]) -> Dict[str, float]:
     return {k: float(curr_A.get(k, 0.0)) / 1e6 for k in FAMILIES_ALL}
 
@@ -190,12 +202,20 @@ def _load_seed_currents(seed_path: str) -> Tuple[Dict[str, float], Dict[str, flo
     else:
         raise ValueError(f"Could not find currents_A/currents_MA in seed file: {seed_path}")
 
+    # Seed provides defaults, but ramp/continuation wrappers can override physics
+    # through environment variables. This is critical for STAR_IP_A ramp-up.
+    Ip_default = _safe_float(j.get("Ip_A", 4.0e6), 4.0e6)
+    paxis_default = _safe_float(j.get("paxis_Pa", 2.0e3), 2.0e3)
+    fvac_default = _safe_float(j.get("fvac", 20.8), 20.8)
+    alpha_m_default = _safe_float(j.get("alpha_m", 1.5), 1.5)
+    alpha_n_default = _safe_float(j.get("alpha_n", 1.1), 1.1)
+
     physics = {
-        "Ip_A": _safe_float(j.get("Ip_A", 4.0e6), 4.0e6),
-        "paxis_Pa": _safe_float(j.get("paxis_Pa", 2.0e3), 2.0e3),
-        "fvac": _safe_float(j.get("fvac", 20.8), 20.8),
-        "alpha_m": _safe_float(j.get("alpha_m", 1.5), 1.5),
-        "alpha_n": _safe_float(j.get("alpha_n", 1.1), 1.1),
+        "Ip_A": _env_float("STAR_IP_A", Ip_default),
+        "paxis_Pa": _env_float("STAR_PAXIS_PA", paxis_default),
+        "fvac": _env_float("STAR_FVAC", fvac_default),
+        "alpha_m": _env_float("STAR_ALPHA_M", alpha_m_default),
+        "alpha_n": _env_float("STAR_ALPHA_N", alpha_n_default),
     }
 
     return currents_A, physics
@@ -294,7 +314,22 @@ def _target_current_limits(target: Dict[str, Any]) -> Tuple[Dict[str, float], Di
     }
 
     imax_A = {k: float(imax.get(k, default_imax[k])) for k in FAMILIES_ALL}
+
+    # STAR segmented-CS convention:
+    # CS_MID and CS_END are control subfamilies of the central OH/CS winding pack.
+    # If the target JSON contains small local values for CS_MID/CS_END from an
+    # earlier discretization, do not let those artificially clip ramp-up scans.
+    # Use at least the parent CS recommended value for the segmented CS controls.
+    if "CS" in imax_A:
+        imax_A["CS_MID"] = max(float(imax_A.get("CS_MID", 0.0)), float(imax_A["CS"]))
+        imax_A["CS_END"] = max(float(imax_A.get("CS_END", 0.0)), float(imax_A["CS"]))
+
     operating_A = {k: float(operating.get(k, 0.35 * imax_A[k])) for k in FAMILIES_ALL}
+
+    # Keep operating limits consistent with the same segmented-CS convention.
+    if "CS" in operating_A:
+        operating_A["CS_MID"] = max(float(operating_A.get("CS_MID", 0.0)), float(operating_A["CS"]))
+        operating_A["CS_END"] = max(float(operating_A.get("CS_END", 0.0)), float(operating_A["CS"]))
 
     return imax_A, operating_A
 
@@ -857,6 +892,8 @@ def _make_bounds_MA(
     # Conservative local spans. This is not brute force.
     base_span = {
         "CS": 1.0,
+        "CS_MID": 1.0,
+        "CS_END": 1.0,
         "PF1": 1.0,
         "PF2": 1.5,
         "PF3": 1.0,
@@ -959,6 +996,14 @@ def fit_toposafe(
 
     target = _load_json(target_path)
     seed_currents_A, physics = _load_seed_currents(seed_path)
+
+    # Final physics override from environment. This protects ramp-up wrappers even
+    # when the seed JSON still contains the baseline 4.0 MA value.
+    physics["Ip_A"] = _env_float("STAR_IP_A", physics.get("Ip_A", 4.0e6))
+    physics["paxis_Pa"] = _env_float("STAR_PAXIS_PA", physics.get("paxis_Pa", 2.0e3))
+    physics["fvac"] = _env_float("STAR_FVAC", physics.get("fvac", 20.8))
+    physics["alpha_m"] = _env_float("STAR_ALPHA_M", physics.get("alpha_m", 1.5))
+    physics["alpha_n"] = _env_float("STAR_ALPHA_N", physics.get("alpha_n", 1.1))
 
     stage = str(stage).strip().lower()
     free_keys, fixed_keys = _stage_free_fixed(stage)

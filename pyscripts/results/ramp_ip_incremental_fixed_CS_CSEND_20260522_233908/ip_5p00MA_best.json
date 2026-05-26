@@ -1,0 +1,211 @@
+{
+  "schema": "fit_simplified_dn_toposafe_run.v1",
+  "stage": "release-cs",
+  "target_path": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\targets\\star_branch_A2p03_k2p16_d0p47_target.json",
+  "seed_path": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\ramp_ip_incremental_fixed_CS_CSEND_20260522_233908\\ip_4p80MA_best.json",
+  "dxf_path": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\cad\\star_baseline.dxf",
+  "best_score": 132.57262318275832,
+  "best_currents_A": {
+    "CS": 0.0,
+    "CS_MID": -31852154.5126691,
+    "CS_END": -14952823.651389498,
+    "PF1": -550253.7446658331,
+    "PF2": -4876908.158483402,
+    "PF3": 1161745.887930487,
+    "PF4": 1383132.961106501,
+    "PF5": 3972241.60436891,
+    "PF6": 6661521.441101968
+  },
+  "best_currents_MA": {
+    "CS": 0.0,
+    "CS_MID": -31.852154512669102,
+    "CS_END": -14.952823651389497,
+    "PF1": -0.5502537446658331,
+    "PF2": -4.876908158483402,
+    "PF3": 1.161745887930487,
+    "PF4": 1.383132961106501,
+    "PF5": 3.9722416043689104,
+    "PF6": 6.661521441101968
+  },
+  "best_result": {
+    "ok": true,
+    "ok_solve": true,
+    "score": 132.57262318275832,
+    "score_info": {
+      "ok": true,
+      "has_true_sep": true,
+      "shape_reason": "ok",
+      "n_xpoints": 4,
+      "fail_reasons": [],
+      "score_total": 79.20020620055352,
+      "axis_term": 0.21046197060849395,
+      "shape_term": 0.976677692589239,
+      "boundary_term": 2.0610734398051664,
+      "x_term": 0.16467472672314915,
+      "sym_term": 4.27479946376729e-14,
+      "reg_term": 6.925102628243245,
+      "cs_reg_term": 0.0,
+      "step_reg_term": 0.009757654316567086,
+      "Rax": 4.300052268769416,
+      "Zax": -5.1688970437169246e-08,
+      "R0": 4.118064013665441,
+      "A": 1.8759236166605757,
+      "kappa": 2.0902158502506407,
+      "delta_u": 0.49113944854986324,
+      "delta_l": 0.49113944854986324,
+      "delta_bar": 0.49113944854986324,
+      "boundary_chamfer_m": 0.2584159040184783,
+      "lower_xpoint": [
+        2.846036353945686,
+        -4.690208089786575
+      ],
+      "upper_xpoint": [
+        2.846036353945686,
+        4.690207986408634
+      ],
+      "dx_lower_m": 0.10043073417834394,
+      "dx_upper_m": 0.10043068084995035,
+      "dshape_A_soft_term": 0.3220401303927237,
+      "dshape_kappa_soft_term": 0.0,
+      "dshape_delta_soft_term": 0.0,
+      "dshape_chamfer_soft_term": 0.0,
+      "dshape_axis_term": 11.524014591190223,
+      "dshape_scalar_soft_total": 11.846054721582947,
+      "dshape_inboard_std_m": 0.20770112779727387,
+      "dshape_inboard_term": 59.3171679213568,
+      "dshape_target_rms_m": NaN,
+      "dshape_target_term": 0.0,
+      "dshape_has_lcfs": 1.0,
+      "dshape_weight": 0.75,
+      "dshape_extra_term": 53.37241698220481,
+      "score_total_with_dshape": 132.57262318275832
+    },
+    "currents_A": {
+      "CS": 0.0,
+      "CS_MID": -31852154.5126691,
+      "CS_END": -14952823.651389498,
+      "PF1": -550253.7446658331,
+      "PF2": -4876908.158483402,
+      "PF3": 1161745.887930487,
+      "PF4": 1383132.961106501,
+      "PF5": 3972241.60436891,
+      "PF6": 6661521.441101968
+    },
+    "currents_MA": {
+      "CS": 0.0,
+      "CS_MID": -31.852154512669102,
+      "CS_END": -14.952823651389497,
+      "PF1": -0.5502537446658331,
+      "PF2": -4.876908158483402,
+      "PF3": 1.161745887930487,
+      "PF4": 1.383132961106501,
+      "PF5": 3.9722416043689104,
+      "PF6": 6.661521441101968
+    },
+    "physics": {
+      "Ip_A": 5000000.0,
+      "paxis_Pa": 2000.0,
+      "fvac": 20.8,
+      "alpha_m": 1.5,
+      "alpha_n": 1.1
+    },
+    "diag": {
+      "ok": true,
+      "R0": 4.118064013665441,
+      "Z0": -8.984440746084843e-05,
+      "a": 2.1952194519498667,
+      "A": 1.8759236166605757,
+      "kappa": 2.0902158502506407,
+      "delta_u": 0.49113944854986324,
+      "delta_l": 0.49113944854986324,
+      "area_m2": 29.512302466171004,
+      "Rmin": 1.9228445617155736,
+      "Rmax": 6.313283465615307,
+      "Zmin": -4.5885723376515966,
+      "Zmax": 4.588392648836675,
+      "method": "analyze_star_separatrix",
+      "R_ax": 4.300052268769416,
+      "Z_ax": -5.1688970437169246e-08
+    },
+    "shape": {
+      "ok_sep": true,
+      "reason": "ok",
+      "xpoints": [
+        {
+          "R": 2.846036353945686,
+          "Z": -4.690208089786575,
+          "psi": 0.337609043492647,
+          "grad2": 0.00026046548454770294
+        },
+        {
+          "R": 2.846036353945686,
+          "Z": 4.690207986408634,
+          "psi": 0.3376013360195427,
+          "grad2": 0.0002604671341584761
+        },
+        {
+          "R": 3.03990514258885,
+          "Z": -4.690208089786575,
+          "psi": 0.3351317848271457,
+          "grad2": 0.002758670238690794
+        },
+        {
+          "R": 3.03990514258885,
+          "Z": 4.690207986408634,
+          "psi": 0.3351232302886964,
+          "grad2": 0.002758673475592441
+        }
+      ],
+      "xpoints_valid": [
+        {
+          "R": 2.846036353945686,
+          "Z": -4.690208089786575,
+          "psi": 0.337609043492647,
+          "grad2": 0.00026046548454770294
+        },
+        {
+          "R": 2.846036353945686,
+          "Z": 4.690207986408634,
+          "psi": 0.3376013360195427,
+          "grad2": 0.0002604671341584761
+        },
+        {
+          "R": 3.03990514258885,
+          "Z": -4.690208089786575,
+          "psi": 0.3351317848271457,
+          "grad2": 0.002758670238690794
+        },
+        {
+          "R": 3.03990514258885,
+          "Z": 4.690207986408634,
+          "psi": 0.3351232302886964,
+          "grad2": 0.002758673475592441
+        }
+      ],
+      "psi_sep": 0.337609043492647,
+      "psi_eval": 0.34021986843467117
+    }
+  },
+  "free_keys": [
+    "CS_MID",
+    "PF1",
+    "PF2",
+    "PF3",
+    "PF4",
+    "PF5",
+    "PF6"
+  ],
+  "fixed_keys": [
+    "CS",
+    "CS_END"
+  ],
+  "physics": {
+    "Ip_A": 5000000.0,
+    "paxis_Pa": 2000.0,
+    "fvac": 20.8,
+    "alpha_m": 1.5,
+    "alpha_n": 1.1
+  },
+  "log_jsonl": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\fit_simplified_dn_toposafe_results.jsonl",
+  "best_json": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\fit_simplified_dn_toposafe_best.json"
+}

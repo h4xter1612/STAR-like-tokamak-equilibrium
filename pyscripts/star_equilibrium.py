@@ -20,7 +20,7 @@ import config_star_bean as cfg
 
 def _default_dxf() -> str:
     here = Path(__file__).resolve().parent
-    return str((here / "cad" / "star_baseline.dxf").resolve())
+    return str((here  / "cad" / "star_baseline.dxf").resolve())
 
 
 def _results_dir() -> Path:
@@ -184,48 +184,42 @@ def _zero_passive_currents(tokamak: Any) -> None:
             pass
 
 
+def _family_from_label_for_current(label: str) -> str:
+    UL = str(label).strip().upper()
+
+    if UL.startswith("CS"):
+        return "CS"
+
+    for k in range(1, 10):
+        fam = f"PF{k}"
+        if UL.startswith(fam):
+            return fam
+
+    return UL
+
+
 def apply_family_currents(tokamak: Any, totals_A: Dict[str, float], mode: str) -> None:
     mode = _sanitize_mode(mode)
 
-    # preferred: group distribution exists
+    # Preferred path: use star_machine_cad group logic.
     try:
         from star_machine_cad import apply_group_currents
         if hasattr(tokamak, "coil_groups") and getattr(tokamak, "coil_groups", None):
             apply_group_currents(tokamak, totals_A, mode=mode)
             _zero_passive_currents(tokamak)
             return
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[WARN] apply_group_currents failed; using fallback current assignment: {repr(e)}")
 
-    # fallback: only if labels match (legacy)
+    # Robust fallback for discretized labels like CS1M_F001, PF4U_F012, etc.
     for lab, coil in getattr(tokamak, "coils_dict", {}).items():
-        UL = str(lab).upper()
+        UL = str(lab).strip().upper()
+        fam = _family_from_label_for_current(UL)
 
-        # CS: soporta variantes típicas
-        if UL in ("CS", "CS_MID", "CS_END"):
-            coil.current = float(totals_A.get("CS", 0.0))
-
-        elif UL in ("PF1U", "PF1L"):
-            coil.current = float(totals_A.get("PF1", 0.0))
-        elif UL in ("PF2U", "PF2L"):
-            coil.current = float(totals_A.get("PF2", 0.0))
-        elif UL in ("PF3U", "PF3L"):
-            coil.current = float(totals_A.get("PF3", 0.0))
-
-        # NUEVO: PF4–PF6
-        elif UL in ("PF4U", "PF4L"):
-            coil.current = float(totals_A.get("PF4", 0.0))
-        elif UL in ("PF5U", "PF5L"):
-            coil.current = float(totals_A.get("PF5", 0.0))
-        elif UL in ("PF6U", "PF6L"):
-            coil.current = float(totals_A.get("PF6", 0.0))
-
-        else:
-            # keep other coils (blanket, etc.) at 0
-            try:
-                coil.current = 0.0
-            except Exception:
-                pass
+        try:
+            coil.current = float(totals_A.get(fam, 0.0))
+        except Exception:
+            pass
 
     _zero_passive_currents(tokamak)
 
@@ -282,6 +276,7 @@ def print_group_currents_sanity(tokamak: Any, totals_A: Dict[str, float], mode: 
     for fam in ("CS", "CS_MID", "CS_END", "PF1", "PF2", "PF3", "PF4", "PF5", "PF6"):
         target = float(totals_A.get(fam, 0.0))
         labs = _get_group_labels(tokamak, fam)
+
         if not labs:
             print(f"[SANITY] {fam}: no labels in coil_groups")
             continue
@@ -298,13 +293,24 @@ def print_group_currents_sanity(tokamak: Any, totals_A: Dict[str, float], mode: 
             except Exception:
                 pass
 
-        # Relative error (avoid divide by 0)
+        msg = (
+            f"[SANITY] {fam}: n={len(labs)} (found {n_ok}) | "
+            f"sum(segment currents)={s/1e6:+.6f} MA | "
+            f"target direct={target/1e6:+.6f} MA"
+        )
+
+        # CS_MID/CS_END overlap with parent CS, so their sum can be nonzero
+        # even if their direct target is zero.
+        if fam in ("CS_MID", "CS_END") and abs(float(totals_A.get("CS", 0.0))) > 0:
+            msg += "  [overlap subset; parent CS contribution included]"
+            print(msg)
+            continue
+
         denom = max(1.0, abs(target))
         rel = abs(s - target) / denom
-
-        msg = f"[SANITY] {fam}: n={len(labs)} (found {n_ok}) | sum(segment currents)={s/1e6:+.6f} MA | target total={target/1e6:+.6f} MA"
         if rel > 0.02:
             msg += f"  <-- WARNING rel_err={rel:.3%} (mode={mode})"
+
         print(msg)
 
 # -------------------------
@@ -1045,10 +1051,11 @@ def build_equilibrium(
         this_tol = tol_final if (j == len(f_list)) else tol_ramp
 
         # NUEVO: incluye PF4–PF6 (mantiene PF1–PF3 como baseline desde cfg)
+        seg_info = geom.get("cs_segment_info", {}) or {}
+        cs_seg_enabled_runtime = bool(seg_info.get("enabled", False))
+
         totals_A = {
             "CS":  float(f) * float(getattr(cfg, "CS_current", 0.0)),
-            "CS_MID":  float(f) * float(getattr(cfg, "CS_MID_current", 0.0)),
-            "CS_END":  float(f) * float(getattr(cfg, "CS_END_current", 0.0)),
             "PF1": float(f) * float(getattr(cfg, "PF1_current", 0.0)),
             "PF2": float(f) * float(getattr(cfg, "PF2_current", 0.0)),
             "PF3": float(f) * float(getattr(cfg, "PF3_current", 0.0)),
@@ -1056,6 +1063,10 @@ def build_equilibrium(
             "PF5": float(f) * float(getattr(cfg, "PF5_current", 0.0)),
             "PF6": float(f) * float(getattr(cfg, "PF6_current", 0.0)),
         }
+
+        if cs_seg_enabled_runtime:
+            totals_A["CS_MID"] = float(f) * float(getattr(cfg, "CS_MID_current", 0.0))
+            totals_A["CS_END"] = float(f) * float(getattr(cfg, "CS_END_current", 0.0))
 
         apply_family_currents(tokamak, totals_A, mode=mode)
         if verbose:

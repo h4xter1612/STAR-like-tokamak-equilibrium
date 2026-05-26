@@ -1,0 +1,45 @@
+{
+  "stage_index": 3,
+  "ip_ma": 4.8,
+  "paxis_pa": 2000.0,
+  "seed_in": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\ramp_ip_incremental_fixed_CS_CSEND_20260523_230646\\ip_4p60MA_best.json",
+  "target": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\targets\\star_branch_A2p03_k2p16_d0p47_target.json",
+  "started": "Sat May 23 23:43:09 2026",
+  "accepted": true,
+  "dshape_best": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\ramp_ip_incremental_fixed_CS_CSEND_20260523_230646\\stage_003_Ip_4p80MA\\ip_4p80_dshape_best.json",
+  "dshape_summary": {
+    "exists": true,
+    "currents_MA": {
+      "CS": 0.0,
+      "CS_MID": -31.48905725600362,
+      "CS_END": -14.972655418433291,
+      "PF1": -0.38002120102682285,
+      "PF2": -4.911207645352022,
+      "PF3": 1.1772810571401326,
+      "PF4": 1.6344852811370938,
+      "PF5": 4.038432251448948,
+      "PF6": 6.28485221060693
+    },
+    "score": 124.52458939695686,
+    "ok": true
+  },
+  "best_json": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\ramp_ip_incremental_fixed_CS_CSEND_20260523_230646\\ip_4p80MA_best.json",
+  "summary": {
+    "exists": true,
+    "currents_MA": {
+      "CS": 0.0,
+      "CS_MID": -31.48905725600362,
+      "CS_END": -14.972655418433291,
+      "PF1": -0.38002120102682285,
+      "PF2": -4.911207645352022,
+      "PF3": 1.1772810571401326,
+      "PF4": 1.6344852811370938,
+      "PF5": 4.038432251448948,
+      "PF6": 6.28485221060693
+    },
+    "score": 124.52458939695686,
+    "ok": true
+  },
+  "status": "accepted",
+  "ended": "Sat May 23 23:54:03 2026"
+}

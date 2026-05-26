@@ -1,0 +1,18 @@
+{
+  "created": "Fri May 22 23:01:32 2026",
+  "seed_initial": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\seeds\\star_A2p03_k2p16_d0p47_baseline_seed.json",
+  "target": "C:\\Users\\conej\\Documents\\Fusion\\EPFL\\Simulations\\Git\\STAR-like-tokamak-equilibrium\\pyscripts\\results\\targets\\star_branch_A2p03_k2p16_d0p47_target.json",
+  "dxf": ".\\star_baseline.dxf",
+  "ip_stages_ma": [
+    4.2,
+    4.4,
+    4.6
+  ],
+  "paxis_pa": 2000.0,
+  "workers": 4,
+  "iters": 5,
+  "pop": 12,
+  "skip_divertor": true,
+  "div_every": 3,
+  "keep_passives": false
+}

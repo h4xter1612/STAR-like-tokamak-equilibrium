@@ -268,7 +268,7 @@ class CADImportOptions:
     # Example:
     #   0.45 means central 45% of the full CS height is CS_MID,
     #   and the remaining 55% is CS_END, split between top and bottom.
-    cs_mid_fraction: float = 1.0 #0.45
+    cs_mid_fraction: float = 0.45 #0.45
 
     # Optional absolute Z cutoff [m].
     # If None, the code computes:
@@ -1170,7 +1170,8 @@ def _attach_imax_metrics_to_geom(
         "segmented_groups_area_basis": "sum_of_discretized_filament_areas",
     }
 
-    _add_segmented_group_imax_metrics(geom, opts)
+    if bool(getattr(opts, "cs_segmented", False)):
+        _add_segmented_group_imax_metrics(geom, opts)
 
 def _add_segmented_cs_groups_to_geom(
     geom: Dict,
@@ -2493,7 +2494,8 @@ def load_geom_from_dxf(
         # ),
     }
 
-    _add_segmented_cs_groups_to_geom(geom, opts)
+    if bool(getattr(opts, "cs_segmented", False)):
+        _add_segmented_cs_groups_to_geom(geom, opts)
     _attach_imax_metrics_to_geom(geom, opts)
 
     # Attach marker windows (if any)
@@ -2621,7 +2623,7 @@ def make_star_machine_from_cad(
     else:
         dxf = Path(dxf_path)
         if not dxf.is_absolute():
-            dxf = (cad_dir / dxf).resolve()
+            dxf = (cad_dir / dxf).resolve() # checkcheck
 
     geom = load_geom_from_dxf(dxf, layers=layers, opts=opts)
 
@@ -2814,33 +2816,89 @@ def make_star_machine_from_cad(
 # -----------------------------
 
 def apply_group_currents(tokamak, group_currents: Dict[str, float], *, mode: str = "area"):
+    """
+    Apply current-control family currents to discretized coils.
+
+    Important semantics:
+    - Active coil currents are reset to zero before applying families.
+    - Family currents are added, not overwritten.
+    - This is required because CS, CS_MID and CS_END can overlap:
+        CS      = parent/full central solenoid group
+        CS_MID  = subset of CS filaments
+        CS_END  = subset of CS filaments
+
+      Therefore:
+        CS_current != 0, CS_MID_current = 0, CS_END_current = 0
+      correctly gives a uniform CS current.
+
+      And:
+        CS_current = 0, CS_MID_current != 0, CS_END_current != 0
+      correctly gives segmented control.
+
+      If all three are nonzero, the result is:
+        total filament current = parent CS contribution + local segment contribution.
+    """
     mode = str(mode).lower().strip()
     groups = getattr(tokamak, "coil_groups", {}) or {}
     weights = getattr(tokamak, "coil_group_weights", {}) or {}
+    coils_dict = getattr(tokamak, "coils_dict", {}) or {}
+
+    # Normalize coil dictionary keys.
+    coil_map = {str(k).strip().upper(): v for k, v in coils_dict.items()}
+
+    # Reset active coils only. Passive coils remain zero / untouched here.
+    active = getattr(tokamak, "active_coils", None)
+    if active is None:
+        active = list(coil_map.keys())
+
+    for lab in active:
+        UL = str(lab).strip().upper()
+        c = coil_map.get(UL, None)
+        if c is not None:
+            try:
+                c.current = 0.0
+            except Exception:
+                pass
 
     for fam, Itot in group_currents.items():
         fam = _normalize_label(fam)
+        Itot = float(Itot)
+
         labs = groups.get(fam, [])
+        labs = [_normalize_label(x) for x in labs]
+
         if not labs:
             continue
 
         if mode == "same":
+            # Add same current to each filament.
             for lab in labs:
-                if lab in tokamak.coils_dict:
-                    tokamak.coils_dict[lab].current = float(Itot)
+                c = coil_map.get(lab, None)
+                if c is not None:
+                    try:
+                        c.current = float(getattr(c, "current", 0.0)) + Itot
+                    except Exception:
+                        pass
             continue
 
         if mode == "equal":
-            w = {lab: 1.0 / len(labs) for lab in labs}
-        else:  # "area"
+            w = {lab: 1.0 / max(1, len(labs)) for lab in labs}
+        else:
             w = weights.get(fam, None)
             if not w:
-                w = {lab: 1.0 / len(labs) for lab in labs}
+                w = {lab: 1.0 / max(1, len(labs)) for lab in labs}
+
+        # Normalize weight keys defensively.
+        w = {_normalize_label(k): float(v) for k, v in dict(w).items()}
 
         for lab in labs:
-            if lab in tokamak.coils_dict:
-                tokamak.coils_dict[lab].current = float(Itot) * float(w.get(lab, 0.0))
-
+            c = coil_map.get(lab, None)
+            if c is None:
+                continue
+            try:
+                c.current = float(getattr(c, "current", 0.0)) + Itot * float(w.get(lab, 0.0))
+            except Exception:
+                pass
 
 # -----------------------------
 # Plot with right-side parameter box

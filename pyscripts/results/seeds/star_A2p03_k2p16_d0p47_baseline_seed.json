@@ -1,0 +1,130 @@
+{
+  "schema": "star_seed.currents.v3",
+  "name": "star_A2p03_k2p16_d0p47_baseline",
+  "description": "Corrected STAR-like low-pressure double-null baseline after CAD/passive-structure and CS-gap correction. Use as seed for Ip ramp-up.",
+  "stage": "baseline_manual_current_branch",
+  "dxf_path": ".\\star_baseline.dxf",
+  "target_path": ".\\results\\targets\\star_branch_A2p03_k2p16_d0p47_target.json",
+  "physics": {
+    "Ip_A": 4000000.0,
+    "Ip_MA": 4.0,
+    "paxis_Pa": 2000.0,
+    "fvac": 20.8,
+    "alpha_m": 1.5,
+    "alpha_n": 1.1
+  },
+  "best_currents_A": {
+    "CS": 0.0,
+    "CS_MID": -31702022.15676789,
+    "CS_END": -14952823.651389498,
+    "PF1": -388173.2195496072,
+    "PF2": -4373974.253898833,
+    "PF3": 1282891.878232824,
+    "PF4": 1571944.6463585598,
+    "PF5": 3753141.903475711,
+    "PF6": 6474193.137884976
+  },
+  "multipliers_used": {
+    "CS": 0.0,
+    "CS_MID": 8.5,
+    "CS_END": 7.0,
+    "PF1": 0.21,
+    "PF2": 1.55,
+    "PF3": 0.76,
+    "PF4": 0.3,
+    "PF5": 0.75,
+    "PF6": 0.59
+  },
+  "source_base_currents_A": {
+    "CS": -5500000.0,
+    "CS_MID": -3729649.665502105,
+    "CS_END": -2136117.664484214,
+    "PF1": -1848443.9026171772,
+    "PF2": -2821918.8734831177,
+    "PF3": 1688015.6292537155,
+    "PF4": 5239815.487861866,
+    "PF5": 5004189.204634282,
+    "PF6": 10973208.70827962
+  },
+  "geometry_diagnostics": {
+    "method": "analyze_star_separatrix",
+    "R_axis_m": 4.397,
+    "Z_axis_m": 0.0,
+    "R0_m": 4.2083,
+    "a_m": 2.0756,
+    "A": 2.0275,
+    "kappa": 2.1636,
+    "delta_u": 0.4695,
+    "delta_l": 0.4695,
+    "delta_bar": 0.4695,
+    "area_m2": 27.4733,
+    "bounds": {
+      "Rmin_m": 2.1327,
+      "Rmax_m": 6.284,
+      "Zmin_m": -4.4893,
+      "Zmax_m": 4.4924
+    },
+    "inside_WALL_INNER": true,
+    "min_abs_distance_to_WALL_INNER_m": 0.0978,
+    "inside_WALL_OUTER": true,
+    "notes": "Geometry intentionally follows the corrected branch, not the old simplified Miller/CAD target."
+  },
+  "current_limits_reference_A": {
+    "CS": 71789000.0,
+    "CS_MID": 32903000.0,
+    "CS_END": 38886000.0,
+    "PF1": 15000000.0,
+    "PF2": 15000000.0,
+    "PF3": 7500000.0,
+    "PF4": 5829000.0,
+    "PF5": 8261000.0,
+    "PF6": 15302000.0
+  },
+  "provenance": {
+    "created_by": "ChatGPT",
+    "created_at": "2026-05-22",
+    "note": "Manual baseline currents provided by Juan Pablo; JSON prepared for fit_simplified_dn_* and Ip continuation wrappers."
+  },
+  "best_currents_MA": {
+    "CS": 0.0,
+    "CS_MID": -31.70202215676789,
+    "CS_END": -14.952823651389497,
+    "PF1": -0.3881732195496072,
+    "PF2": -4.373974253898833,
+    "PF3": 1.282891878232824,
+    "PF4": 1.5719446463585598,
+    "PF5": 3.753141903475711,
+    "PF6": 6.474193137884976
+  },
+  "best_result": {
+    "ok": true,
+    "ok_solve": true,
+    "score": null,
+    "score_info": {
+      "method": "analyze_star_separatrix",
+      "R_axis_m": 4.397,
+      "Z_axis_m": 0.0,
+      "R0_m": 4.2083,
+      "a_m": 2.0756,
+      "A": 2.0275,
+      "kappa": 2.1636,
+      "delta_u": 0.4695,
+      "delta_l": 0.4695,
+      "delta_bar": 0.4695,
+      "area_m2": 27.4733,
+      "bounds": {
+        "Rmin_m": 2.1327,
+        "Rmax_m": 6.284,
+        "Zmin_m": -4.4893,
+        "Zmax_m": 4.4924
+      },
+      "inside_WALL_INNER": true,
+      "min_abs_distance_to_WALL_INNER_m": 0.0978,
+      "inside_WALL_OUTER": true,
+      "notes": "Geometry intentionally follows the corrected branch, not the old simplified Miller/CAD target.",
+      "has_true_sep": true,
+      "shape_reason": "ok",
+      "n_xpoints": 4
+    }
+  }
+}
