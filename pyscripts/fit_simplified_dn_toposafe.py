@@ -488,7 +488,60 @@ def compute_toposafe_score(
     kap = _safe_float(diag.get("kappa", np.nan))
     du = _safe_float(diag.get("delta_u", np.nan))
     dl = _safe_float(diag.get("delta_l", np.nan))
+    area = _safe_float(diag.get("area_m2", diag.get("area", np.nan)), np.nan)
+
+    inside_wall = bool(diag.get("inside_WALL_INNER", False))
+    outside_frac = _safe_float(diag.get("outside_frac", 1.0), 1.0)
+    signed_gap = _safe_float(diag.get("signed_gap_to_WALL_INNER_m", np.nan), np.nan)
+    wall_gap_target_m = _env_float("STAR_WALL_GAP_TARGET_M", 0.02)
+
+    wall_term = 0.0
+
+    if not inside_wall:
+        wall_term += 5.0e5
+
+    if np.isfinite(outside_frac) and outside_frac > 0.0:
+        wall_term += 1.0e7 * outside_frac
+    else:
+        if not np.isfinite(outside_frac):
+            wall_term += 5.0e5
+
+    if not np.isfinite(signed_gap):
+        wall_term += 1.0e6
+    elif signed_gap < 0.0:
+        wall_term += 2.0e7 * abs(signed_gap)
+    elif signed_gap < wall_gap_target_m:
+        wall_term += 5.0e4 * ((wall_gap_target_m - signed_gap) / max(wall_gap_target_m, 1e-9)) ** 2
     dbar = 0.5 * (du + dl) if np.isfinite(du) and np.isfinite(dl) else float("nan")
+
+
+    branch_Rax_min = _env_float("STAR_BRANCH_RAX_MIN", 3.5)
+    branch_Rax_max = _env_float("STAR_BRANCH_RAX_MAX", 5.0)
+    branch_Zax_max = _env_float("STAR_BRANCH_ZAX_MAX", 0.8)
+    branch_area_min = _env_float("STAR_BRANCH_AREA_MIN", 18.0)
+    branch_area_max = _env_float("STAR_BRANCH_AREA_MAX", 45.0)
+    branch_weight = _env_float("STAR_BRANCH_TERM_WEIGHT", 1.0e6)
+
+    branch_term = 0.0
+
+    if not np.isfinite(Rax) or not (branch_Rax_min <= Rax <= branch_Rax_max):
+        branch_term += branch_weight
+
+    if not np.isfinite(Zax) or abs(Zax) > branch_Zax_max:
+        branch_term += branch_weight
+
+    if not np.isfinite(area) or not (branch_area_min <= area <= branch_area_max):
+        branch_term += branch_weight
+
+    for name, val in [
+        ("R0", R0),
+        ("A", A),
+        ("kappa", kap),
+        ("delta_bar", dbar),
+    ]:
+        if not np.isfinite(val):
+            branch_term += branch_weight
+
 
     xps = _extract_xpoints(shape)
     lower_xp, upper_xp = _pick_lower_upper(xps)
@@ -509,6 +562,20 @@ def compute_toposafe_score(
     if not ok_diag:
         score += 0.35 * float(w["topology_fail"])
         fail_reasons.append("no_valid_plasma_diag")
+
+    score += wall_term
+
+    score += branch_term
+
+    if branch_term > 0.0:
+        fail_reasons.append("branch_gate_failed")
+
+    if not inside_wall:
+        fail_reasons.append("outside_WALL_INNER")
+    if np.isfinite(outside_frac) and outside_frac > 0.0:
+        fail_reasons.append("outside_frac_nonzero")
+    if np.isfinite(signed_gap) and signed_gap < wall_gap_target_m:
+        fail_reasons.append("wall_gap_below_target")
 
     # Double-null preference.
     if n_xp < 2:
@@ -552,7 +619,8 @@ def compute_toposafe_score(
     else:
         shape_term += 1e4
 
-    score += float(w["shape_scalars"]) * shape_term
+    shape_weight_scale = _env_float("STAR_SHAPE_WEIGHT_SCALE", 0.35)
+    score += shape_weight_scale * float(w["shape_scalars"]) * shape_term
 
     # Boundary term.
     if np.isfinite(chamfer):
@@ -561,7 +629,8 @@ def compute_toposafe_score(
         boundary_term = 1e4
         fail_reasons.append("no_lcfs_curve_for_boundary_fit")
 
-    score += float(w["boundary_chamfer"]) * boundary_term
+    boundary_weight_scale = _env_float("STAR_BOUNDARY_WEIGHT_SCALE", 0.25)
+    score += boundary_weight_scale * float(w["boundary_chamfer"]) * boundary_term
 
     # X-point term.
     dx_lower = _point_dist(lower_xp, lower_t)
@@ -578,7 +647,8 @@ def compute_toposafe_score(
     else:
         x_term += 1e4
 
-    score += float(w["xpoints"]) * x_term
+    xpoint_weight_scale = _env_float("STAR_XPOINT_WEIGHT_SCALE", 0.15)
+    score += xpoint_weight_scale * float(w["xpoints"]) * x_term
 
     # Vertical symmetry term.
     sym_term = 0.0
@@ -593,7 +663,8 @@ def compute_toposafe_score(
     else:
         sym_term += 1e3
 
-    score += float(w["vertical_symmetry"]) * sym_term
+    sym_weight_scale = _env_float("STAR_SYM_WEIGHT_SCALE", 0.25)
+    score += sym_weight_scale * float(w["vertical_symmetry"]) * sym_term
 
     # Current regularization.
     reg_term = 0.0
@@ -614,9 +685,16 @@ def compute_toposafe_score(
         reg_term += (I / op) ** 2
 
         # Step regularization relative to previous best/ref.
+        # Let segmented CS move more freely during ramp-up.
         if k in free_keys:
             dI = float(currents_A.get(k, 0.0)) - float(ref_currents_A.get(k, 0.0))
-            step_reg_term += (dI / max(0.25 * op, 1.0)) ** 2
+
+            if k in ("CS_MID", "CS_END"):
+                denom = max(0.60 * op, 1.0)
+            else:
+                denom = max(0.25 * op, 1.0)
+
+            step_reg_term += (dI / denom) ** 2
 
     # Extra CS-specific regularization.
     Ics = abs(float(currents_A.get("CS", 0.0)))
@@ -634,12 +712,25 @@ def compute_toposafe_score(
         score += 5.0e7
         fail_reasons.append("current_above_0p8_imax")
 
-    score += float(w["current_regularization"]) * reg_term
-    score += float(w["cs_regularization_extra"]) * cs_reg_term
-    score += float(w["current_step_regularization"]) * step_reg_term
+    current_reg_scale = _env_float("STAR_CURRENT_REG_SCALE", 0.20)
+    cs_reg_scale = _env_float("STAR_CS_REG_SCALE", 0.10)
+    step_reg_scale = _env_float("STAR_STEP_REG_SCALE", 0.15)
+
+    score += current_reg_scale * float(w["current_regularization"]) * reg_term
+    score += cs_reg_scale * float(w["cs_regularization_extra"]) * cs_reg_term
+    score += step_reg_scale * float(w["current_step_regularization"]) * step_reg_term
 
     info = {
-        "ok": bool(has_true_sep and ok_diag),
+        "ok": bool(
+            has_true_sep
+            and ok_diag
+            and inside_wall
+            and np.isfinite(signed_gap)
+            and signed_gap > 0.0
+            and np.isfinite(outside_frac)
+            and outside_frac == 0.0
+            and branch_term == 0.0
+        ),
         "has_true_sep": bool(has_true_sep),
         "shape_reason": reason,
         "n_xpoints": n_xp,
@@ -669,6 +760,20 @@ def compute_toposafe_score(
         "upper_xpoint": upper_xp,
         "dx_lower_m": dx_lower,
         "dx_upper_m": dx_upper,
+
+        "inside_WALL_INNER": bool(inside_wall),
+        "outside_frac": float(outside_frac),
+        "signed_gap_to_WALL_INNER_m": float(signed_gap),
+        "wall_gap_target_m": float(wall_gap_target_m),
+        "wall_term": float(wall_term),
+
+        "area": area,
+        "branch_term": float(branch_term),
+        "branch_Rax_min": float(branch_Rax_min),
+        "branch_Rax_max": float(branch_Rax_max),
+        "branch_Zax_max": float(branch_Zax_max),
+        "branch_area_min": float(branch_area_min),
+        "branch_area_max": float(branch_area_max),
     }
 
     return float(score), info
@@ -891,15 +996,15 @@ def _make_bounds_MA(
 
     # Conservative local spans. This is not brute force.
     base_span = {
-        "CS": 1.0,
-        "CS_MID": 1.0,
-        "CS_END": 1.0,
-        "PF1": 1.0,
-        "PF2": 1.5,
-        "PF3": 1.0,
-        "PF4": 1.5,
-        "PF5": 1.5,
-        "PF6": 2.0,
+        "CS": 2.5,
+        "CS_MID": 6.0,
+        "CS_END": 5.0,
+        "PF1": 1.2,
+        "PF2": 2.5,
+        "PF3": 1.5,
+        "PF4": 2.0,
+        "PF5": 2.5,
+        "PF6": 3.0,
     }
 
     bounds: Dict[str, Tuple[float, float]] = {}
@@ -914,8 +1019,8 @@ def _make_bounds_MA(
         # Extra cautious for CS in release stage.
         if k == "CS":
             if stage == "release-cs":
-                hard_MA = min(hard_MA, 0.35 * float(imax_A[k]) / 1e6)
-                span = min(span, 1.5)
+                hard_MA = min(hard_MA, 0.80 * float(imax_A[k]) / 1e6)
+                span = min(span, 4.0)
             else:
                 hard_MA = abs(c)
 
@@ -1099,13 +1204,38 @@ def fit_toposafe(
         )
         sigma_MA = _sigma_from_bounds_MA(bounds_MA, sigma_frac)
 
+        # Always include the current best.
         batch: List[Dict[str, float]] = []
 
         # Always include the current best.
         batch.append(dict(best_currents_A))
 
+        # Directed segmented-CS pushes for ramp-up.
+        # Sign convention in current STAR runs: useful CS_MID/CS_END are negative.
+        for dmid_MA, dend_MA in [
+            (-0.5,  0.0),
+            (-1.0,  0.0),
+            (-1.5,  0.0),
+            ( 0.0, -0.5),
+            ( 0.0, -1.0),
+            (-0.5, -0.5),
+            (-1.0, -0.5),
+            (-1.0, -1.0),
+            (-1.5, -0.5),
+            (-1.5, -1.0),
+        ]:
+            cand = dict(best_currents_A)
+
+            if "CS_MID" in free_keys:
+                cand["CS_MID"] = float(cand.get("CS_MID", 0.0)) + dmid_MA * 1e6
+
+            if "CS_END" in free_keys:
+                cand["CS_END"] = float(cand.get("CS_END", 0.0)) + dend_MA * 1e6
+
+            batch.append(cand)
+
         n_global = max(2, int(pop // 5))
-        n_local = max(0, int(pop) - n_global - 1)
+        n_local = max(0, int(pop) - n_global - len(batch))
 
         for _ in range(n_global):
             batch.append(_sample_uniform_A(best_currents_A, bounds_MA, free_keys))
@@ -1202,7 +1332,13 @@ def fit_toposafe(
             f"k={_safe_float(si_best.get('kappa', np.nan)):.3f} "
             f"d={_safe_float(si_best.get('delta_bar', np.nan)):.3f} "
             f"Rax={_safe_float(si_best.get('Rax', np.nan)):.3f} "
-            f"CS={_currents_A_to_MA(best_currents_A).get('CS', 0.0):+.3f} MA "
+            # f"CS={_currents_A_to_MA(best_currents_A).get('CS', 0.0):+.3f} MA "
+            f"Zax={_safe_float(si_best.get('Zax', np.nan)):.3f} "
+            f"area={_safe_float(si_best.get('area', np.nan)):.2f} "
+            f"gap={_safe_float(si_best.get('signed_gap_to_WALL_INNER_m', np.nan)):.4f} "
+            f"out={_safe_float(si_best.get('outside_frac', np.nan)):.4f} "
+            f"wall={_safe_float(si_best.get('wall_term', np.nan)):.1f} "
+            f"branch={_safe_float(si_best.get('branch_term', np.nan)):.1f} "
             f"| {dt:.1f}s"
         )
 

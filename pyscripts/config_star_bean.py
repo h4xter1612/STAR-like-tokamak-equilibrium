@@ -69,8 +69,8 @@ cs_segment_keep_parent = True
 
 # Deprecated / exploratory segmented-CS controls.
 # Keep defined for backward compatibility with old scripts, but do not use.
-CS_MID_current  = -3729649.665502105*(8.5)*0 #7.7
-CS_END_current  = -2136117.664484214*(7.0)*0
+# CS_MID_current  = -3729649.665502105*(8.5)*0 #7.7
+# CS_END_current  = -2136117.664484214*(7.0)*0
 CS_current  =  -5500000.0*(0.0)
 
 # ----------------------------
@@ -79,14 +79,14 @@ CS_current  =  -5500000.0*(0.0)
 
 # THESE ARE THE WORKING CURRENTS FOR 2E3 PA AND 4E6 MA
 # CS_current  =  -3729649.665502105*(8.5)
-PF1_current = -1848443.9026171772*(0.21)
-PF2_current =  -2821918.8734831177*(1.55)
-PF3_current =  1688015.6292537155*(0.76)
-PF4_current = 5239815.487861866*(0.30)
-PF5_current =  5004189.204634282*(0.75) #1.1 0.76
-PF6_current =  10973208.70827962*(0.59)*0.3
+# PF1_current = -1848443.9026171772*(0.21)
+# PF2_current =  -2821918.8734831177*(1.55)
+# PF3_current =  1688015.6292537155*(0.76)
+# PF4_current = 5239815.487861866*(0.30)
+# PF5_current =  5004189.204634282*(0.75) #1.1 0.76
+# PF6_current =  10973208.70827962*(0.59)
 
-CS_current  =  0.0
+# CS_current  =  0.0
 
 # CS_MID_current  = -36917866.175284825*1.0 # 1.5
 # CS_END_current  = -15433085.616072046*1.0 # 3
@@ -185,6 +185,16 @@ CS_current  =  0.0
 # PF5_current =  5191268.491038531
 # PF6_current =  4095619.4982399372               # increase it
 
+CS_MID_current  = -46431945.98808929     
+CS_END_current  = -19772634.142799236   
+PF1_current =  531900.9172397974 
+PF2_current =  -9941880.513224788
+PF3_current =  3190189.3135533696 
+PF4_current =  4065335.450210192
+PF5_current =  3650125.9308504406
+PF6_current =  10784861.072884243     
+
+
 BASE_FAMILY_CURRENTS_A = {
     "CS":  CS_current,
     "PF1": PF1_current,
@@ -235,8 +245,8 @@ ENFORCE_OPERATING_LIMITS = False  # True => clamp/castigo en objective
 # ----------------------------
 # Valores base del equilibrio bueno actual.
 # Los wrappers pueden sobreescribir Ip/paxis con variables de entorno.
-Ip      = _env_float("STAR_IP_A", 4e6)      # 1.72e6, 4.0e6, 13.2e6
-paxis   = _env_float("STAR_PAXIS_PA", 2e3)  # Pa; baseline actual = 2.0e3 1.2e6
+Ip      = _env_float("STAR_IP_A", 7.0e6)      # 1.72e6, 4.0e6, 13.2e6
+paxis   = _env_float("STAR_PAXIS_PA", 1620)  # Pa; baseline actual = 2.0e3 1.2e6
 fvac    = _env_float("STAR_FVAC", 20.8)
 alpha_m = _env_float("STAR_ALPHA_M", 1.5)
 alpha_n = _env_float("STAR_ALPHA_N", 1.1)

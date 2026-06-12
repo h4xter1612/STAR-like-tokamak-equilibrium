@@ -96,4 +96,8 @@ Thumbs.db
 # Archivos generados por el proyecto
 # ----------------------
 
+pyscripts/results
 
+pyscripts/results/fit_simplified_dn_toposafe_results.jsonl
+
+results/Current_4MA

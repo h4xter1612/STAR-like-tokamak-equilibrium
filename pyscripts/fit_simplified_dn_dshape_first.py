@@ -567,23 +567,23 @@ def _extract_target_path_from_argv(argv: Sequence[str]) -> Optional[str]:
 def _parse_dshape_args(argv: Sequence[str]) -> Tuple[argparse.Namespace, List[str]]:
     ap = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
 
-    ap.add_argument("--dshape-weight", type=float, default=1.0)
+    ap.add_argument("--dshape-weight", type=float, default=0.25)
 
-    ap.add_argument("--inboard-weight", type=float, default=45.0)
+    ap.add_argument("--inboard-weight", type=float, default=25.0)
     ap.add_argument("--inboard-sigma-m", type=float, default=0.20)
 
-    ap.add_argument("--target-rms-weight", type=float, default=35.0)
+    ap.add_argument("--target-rms-weight", type=float, default=0.0)
     ap.add_argument("--target-rms-sigma-m", type=float, default=0.22)
 
-    ap.add_argument("--delta-weight", type=float, default=22.0)
+    ap.add_argument("--delta-weight", type=float, default=5.0)
     ap.add_argument("--delta-target", type=float, default=0.48)
     ap.add_argument("--delta-sigma", type=float, default=0.10)
 
-    ap.add_argument("--kappa-weight", type=float, default=10.0)
+    ap.add_argument("--kappa-weight", type=float, default=3.0)
     ap.add_argument("--kappa-min", type=float, default=2.02)
     ap.add_argument("--kappa-sigma", type=float, default=0.12)
 
-    ap.add_argument("--A-weight", type=float, default=8.0)
+    ap.add_argument("--A-weight", type=float, default=2.0)
     ap.add_argument("--A-min", type=float, default=1.62)
     ap.add_argument("--A-sigma", type=float, default=0.12)
 
@@ -591,7 +591,7 @@ def _parse_dshape_args(argv: Sequence[str]) -> Tuple[argparse.Namespace, List[st
     ap.add_argument("--chamfer-max-m", type=float, default=0.34)
     ap.add_argument("--chamfer-sigma-m", type=float, default=0.08)
 
-    ap.add_argument("--axis-weight", type=float, default=8.0)
+    ap.add_argument("--axis-weight", type=float, default=3.0)
     ap.add_argument("--R0-target", type=float, default=4.0)
     ap.add_argument("--Raxis-sigma-m", type=float, default=0.25)
 

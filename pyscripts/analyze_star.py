@@ -743,6 +743,69 @@ def _xpoints_for_dn_fallback(
 
     return pts
 
+def _min_dist_curve_to_point(R: np.ndarray, Z: np.ndarray, p: Dict[str, float]) -> float:
+    try:
+        Rp = float(p["R"])
+        Zp = float(p["Z"])
+        return float(np.nanmin(np.hypot(np.asarray(R, float) - Rp, np.asarray(Z, float) - Zp)))
+    except Exception:
+        return float("inf")
+
+
+def _psibndry_dn_quality_ok(
+    R_sep: np.ndarray,
+    Z_sep: np.ndarray,
+    out: Dict[str, Any],
+    *,
+    xpt_touch_tol_m: float = 0.45,
+    z_xpt_tol_m: float = 0.75,
+) -> Tuple[bool, str]:
+    """
+    Reject closed internal psi_bndry contours that do not actually connect
+    to the diverted X-point topology.
+    """
+    R = np.asarray(R_sep, float)
+    Z = np.asarray(Z_sep, float)
+
+    if R.size < 30 or Z.size != R.size:
+        return False, "psibndry_curve_too_short"
+
+    xps = out.get("xpoints_valid", None) or out.get("xpoints", None) or []
+    if len(xps) < 2:
+        return False, "psibndry_no_two_xpoints_for_dn_validation"
+
+    upper = [x for x in xps if float(x.get("Z", 0.0)) > 0.0]
+    lower = [x for x in xps if float(x.get("Z", 0.0)) < 0.0]
+
+    if not upper or not lower:
+        return False, "psibndry_missing_upper_or_lower_xpoint"
+
+    xu = max(upper, key=lambda x: float(x.get("Z", 0.0)))
+    xl = min(lower, key=lambda x: float(x.get("Z", 0.0)))
+
+    du = _min_dist_curve_to_point(R, Z, xu)
+    dl = _min_dist_curve_to_point(R, Z, xl)
+
+    if du > float(xpt_touch_tol_m):
+        return False, f"psibndry_curve_far_from_upper_xpoint:{du:.3f}m"
+    if dl > float(xpt_touch_tol_m):
+        return False, f"psibndry_curve_far_from_lower_xpoint:{dl:.3f}m"
+
+    # A DN-like boundary should reach approximately the X-point height.
+    # This rejects internal closed contours that stop near Z~±2.7 while
+    # the X-points are near Z~±4.7.
+    Zmax = float(np.nanmax(Z))
+    Zmin = float(np.nanmin(Z))
+    Zu = float(xu["Z"])
+    Zl = float(xl["Z"])
+
+    if abs(Zmax - Zu) > float(z_xpt_tol_m):
+        return False, f"psibndry_Zmax_not_near_upper_xpoint:{Zmax:.3f}_vs_{Zu:.3f}"
+    if abs(Zmin - Zl) > float(z_xpt_tol_m):
+        return False, f"psibndry_Zmin_not_near_lower_xpoint:{Zmin:.3f}_vs_{Zl:.3f}"
+
+    return True, "psibndry_dn_quality_ok"
+
 def _try_freegs_dn_fallback(
     eq: Any,
     out: Dict[str, Any],
@@ -810,6 +873,28 @@ def _try_freegs_dn_fallback(
         out["dn_fallback"]["reason"] = "bad_RZ_sep_from_dn_fallback"
         return False
 
+    # Quality gate: reject internal closed psi_bndry curves that do not
+    # actually reach/connect to the detected upper/lower X-points.
+    quality_ok, quality_reason = _psibndry_dn_quality_ok(R_sep, Z_sep, out)
+
+    if not quality_ok:
+        out["dn_fallback"]["ok"] = False
+        out["dn_fallback"]["reason"] = quality_reason
+
+        # Store rejected curve only for debug, not as physical R_sep/Z_sep.
+        out["R_psibndry_rejected"] = [float(x) for x in R_sep.tolist()]
+        out["Z_psibndry_rejected"] = [float(x) for x in Z_sep.tolist()]
+
+        out["ok_sep"] = False
+        out["has_closed_lcfs"] = False
+        out["has_true_separatrix"] = False
+        out["has_usable_sep"] = False
+        out["has_freegs_psibndry_sep"] = False
+        out["sep_source"] = "freegs_psibndry_rejected"
+        out["reason"] = quality_reason
+        out["shape_reason"] = quality_reason
+        return False
+
     met = _metrics_from_boundary(R_sep, Z_sep)
 
     out.update(met)
@@ -822,11 +907,11 @@ def _try_freegs_dn_fallback(
 
     # This is reconstructed from FreeGS psi_bndry, not the old near-separatrix method.
     # Set True to avoid downstream rejection, but keep provenance explicit.
-    out["has_true_separatrix"] = True
+    out["has_true_separatrix"] = False
     out["has_usable_sep"] = True
     out["has_freegs_psibndry_sep"] = True
 
-    out["reason"] = "ok_dn_fallback"
+    out["reason"] = "ok_dn_fallback_quality_checked"
     out["sep_source"] = fb.get("source", "freegs_psibndry_dn_reconstructed")
     out["shape_reason"] = fb.get("reason", "dn_lcfs_reconstructed_from_psibndry_segments")
 
@@ -853,6 +938,7 @@ def analyze_star(
     prefer_inner_lcfs: bool = True,
     psi_percentile_lcfs: Optional[float] = 0.5,
     edge_pad_cells: int = 2,
+    allow_limiter_fallback_as_sep: bool = False,
 ) -> Dict[str, Any]:
     out: Dict[str, Any] = dict(
         ok_sep=False,                 # True only if true X-point + near-separatrix closed curve found
@@ -987,6 +1073,7 @@ def analyze_star(
                 return out
 
         # ---- Fallback LCFS (NOT true separatrix)
+        # ---- Fallback LCFS (diagnostic only; NOT accepted as physical separatrix)
         Rf, Zf, info, psi_lcfs = _lcfs_limiter(
             R1, Z1, psi_RZ, R_ax, Z_ax, psi_ax, geom,
             prefer_inner=bool(prefer_inner_lcfs),
@@ -996,7 +1083,8 @@ def analyze_star(
         out["fallback_lcfs"] = info
         out["psi_lcfs"] = float(psi_lcfs)
 
-        if Rf is not None and Zf is not None and isinstance(info, dict) and info.get("ok", False):
+
+        if allow_limiter_fallback_as_sep and Rf is not None and Zf is not None and isinstance(info, dict) and info.get("ok", False):
             met = _metrics_from_boundary(Rf, Zf)
             out.update(met)
             out["R_sep"] = [float(x) for x in np.asarray(Rf, float).tolist()]
@@ -1006,9 +1094,32 @@ def analyze_star(
             out["has_closed_lcfs"] = True
             out["has_usable_sep"] = True
             out["sep_source"] = "lcfs_limiter"
-            if out.get("reason") in ("init", "no_valid_xpoint_for_psi_sep"):
-                out["reason"] = "fallback_lcfs_ok"
-            out["shape_reason"] = out.get("reason", "fallback_lcfs_ok")
+            out["reason"] = "fallback_lcfs_ok_diagnostic_only"
+            out["shape_reason"] = "fallback_lcfs_ok_diagnostic_only"
+            return out
+        elif Rf is not None and Zf is not None and isinstance(info, dict) and info.get("ok", False):
+            # Store limiter-fallback curve only for debugging/plot comparison.
+            # Do NOT expose it as R_sep/Z_sep, because it can create an artificial
+            # internal LCFS when the real separatrix is open or outside the domain.
+            Rf_arr = np.asarray(Rf, float)
+            Zf_arr = np.asarray(Zf, float)
+            met_fb = _metrics_from_boundary(Rf_arr, Zf_arr)
+
+            out["R_limiter_fallback"] = [float(x) for x in Rf_arr.tolist()]
+            out["Z_limiter_fallback"] = [float(x) for x in Zf_arr.tolist()]
+            out["limiter_fallback_metrics"] = {
+                k: float(v) for k, v in met_fb.items()
+                if isinstance(v, (int, float, np.floating)) and np.isfinite(float(v))
+            }
+
+            out["ok_sep"] = False
+            out["has_true_separatrix"] = False
+            out["has_closed_lcfs"] = False
+            out["has_usable_sep"] = False
+            out["has_freegs_psibndry_sep"] = False
+            out["sep_source"] = "lcfs_limiter_rejected"
+            out["reason"] = "no_physical_separatrix_limiter_fallback_only"
+            out["shape_reason"] = "limiter_fallback_rejected_for_optimization"
             return out
 
         out["ok_sep"] = False

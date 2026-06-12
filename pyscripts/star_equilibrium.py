@@ -326,6 +326,7 @@ def compute_shape(eq: Any, geom: Dict[str, Any]) -> Dict[str, Any]:
             prefer_inner_lcfs=True,
             psi_percentile_lcfs=float(getattr(cfg, "psi_percentile_lcfs", 0.5)),
             edge_pad_cells=2,
+            allow_limiter_fallback_as_sep=False,   # NUEVO: no aceptar LCFS artificial
         )
         # keep a slot for diagnostics in case caller adds it later
         if "plasma_diag" not in shp:
@@ -541,79 +542,387 @@ def _plasma_params_from_curve(R: np.ndarray, Z: np.ndarray) -> Dict[str, Any]:
         "Zmax": float(Zmax),
     }
 
+def _as_closed_polyline(arr):
+    """Return Nx2 array and ensure it is closed."""
+    p = np.asarray(arr, dtype=float)
+
+    if p.ndim != 2:
+        raise ValueError("polyline must be Nx2")
+
+    if p.shape[1] != 2 and p.shape[0] == 2:
+        p = p.T
+
+    if p.shape[1] != 2:
+        raise ValueError(f"polyline has invalid shape {p.shape}")
+
+    if len(p) < 3:
+        raise ValueError("polyline too short")
+
+    if np.hypot(*(p[0] - p[-1])) > 1e-12:
+        p = np.vstack([p, p[0]])
+
+    return p
+
+
+def _distance_points_to_polyline(points, polyline):
+    """
+    Compute minimum Euclidean distance from each point to a closed/open polyline.
+
+    Returns:
+      min_dist: [N]
+      closest: [N,2]
+    """
+    pts = np.asarray(points, dtype=float)
+    poly = np.asarray(polyline, dtype=float)
+
+    a = poly[:-1]
+    b = poly[1:]
+    ab = b - a
+    ab2 = np.sum(ab * ab, axis=1)
+    ab2 = np.where(ab2 <= 1e-30, 1e-30, ab2)
+
+    min_d2 = np.full(len(pts), np.inf)
+    closest = np.full((len(pts), 2), np.nan)
+
+    for i, p in enumerate(pts):
+        ap = p - a
+        t = np.sum(ap * ab, axis=1) / ab2
+        t = np.clip(t, 0.0, 1.0)
+        proj = a + t[:, None] * ab
+        d2 = np.sum((proj - p) ** 2, axis=1)
+        j = int(np.argmin(d2))
+        min_d2[i] = d2[j]
+        closest[i] = proj[j]
+
+    return np.sqrt(min_d2), closest
+
+
+def _extract_wall_inner_polygon(geom):
+    """
+    Robust extractor for WALL_INNER from your CAD geometry dictionary.
+    Adjust the keys if your actual geom uses a more specific structure.
+    """
+
+    if "R_inner" in geom and "Z_inner" in geom:
+        try:
+            return _as_closed_polyline(np.column_stack([geom["R_inner"], geom["Z_inner"]]))
+        except Exception:
+            pass
+
+    candidates = []
+
+    # Common direct keys
+    for k in ("WALL_INNER", "wall_inner", "inner_wall", "limiter"):
+        if k in geom:
+            candidates.append(geom[k])
+
+    # Common nested keys
+    for parent in ("walls", "wall_polygons", "polygons", "cad", "geometry"):
+        obj = geom.get(parent, None)
+        if isinstance(obj, dict):
+            for k in ("WALL_INNER", "wall_inner", "inner_wall", "limiter"):
+                if k in obj:
+                    candidates.append(obj[k])
+
+    # Sometimes stored as list of dicts.
+    for parent in ("layers", "polylines", "cad_layers"):
+        obj = geom.get(parent, None)
+        if isinstance(obj, dict) and "WALL_INNER" in obj:
+            candidates.append(obj["WALL_INNER"])
+
+    for c in candidates:
+        try:
+            # Case: list of points [(R,Z),...]
+            p = np.asarray(c, dtype=float)
+            if p.ndim == 2 and (p.shape[1] == 2 or p.shape[0] == 2):
+                return _as_closed_polyline(p)
+
+        except Exception:
+            pass
+
+        # Case: dict with R/Z arrays
+        if isinstance(c, dict):
+            try:
+                if "R" in c and "Z" in c:
+                    return _as_closed_polyline(np.column_stack([c["R"], c["Z"]]))
+                if "r" in c and "z" in c:
+                    return _as_closed_polyline(np.column_stack([c["r"], c["z"]]))
+                if "points" in c:
+                    return _as_closed_polyline(c["points"])
+            except Exception:
+                pass
+
+        # Case: list containing one or more polylines; use longest.
+        if isinstance(c, (list, tuple)):
+            polys = []
+            for item in c:
+                try:
+                    if isinstance(item, dict) and "points" in item:
+                        p = _as_closed_polyline(item["points"])
+                    elif isinstance(item, dict) and "R" in item and "Z" in item:
+                        p = _as_closed_polyline(np.column_stack([item["R"], item["Z"]]))
+                    else:
+                        p = _as_closed_polyline(item)
+                    polys.append(p)
+                except Exception:
+                    continue
+            if polys:
+                return max(polys, key=len)
+
+    raise KeyError("Could not find WALL_INNER polygon in geom")
+
+def lcfs_wall_inner_diagnostics(shape, geom, *, wall_key="WALL_INNER"):
+    """
+    Real LCFS-vs-WALL_INNER containment check.
+
+    signed_gap_to_WALL_INNER_m:
+      > 0 : whole LCFS is inside WALL_INNER, value is minimum clearance.
+      = 0 : LCFS touches WALL_INNER.
+      < 0 : part of LCFS is outside WALL_INNER, value is negative maximum outside penetration.
+    """
+    R_sep = shape.get("R_sep", None)
+    Z_sep = shape.get("Z_sep", None)
+
+    has_sep = bool(
+        shape.get("ok_sep", False)
+        or shape.get("has_true_separatrix", False)
+        or shape.get("has_usable_sep", False)
+        or shape.get("has_freegs_psibndry_sep", False)
+    )
+
+    if not has_sep or R_sep is None or Z_sep is None or len(R_sep) < 20:
+        return {
+            "ok": False,
+            "inside_WALL_INNER": False,
+            "outside_frac": 1.0,
+            "signed_gap_to_WALL_INNER_m": float("nan"),
+            "min_abs_distance_to_WALL_INNER_m": float("nan"),
+            "max_outside_penetration_m": float("nan"),
+            "reason": "no_valid_lcfs_for_wall_check",
+        }
+
+    lcfs = np.column_stack([np.asarray(R_sep, float), np.asarray(Z_sep, float)])
+
+    try:
+        wall = _extract_wall_inner_polygon(geom)
+    except Exception as e:
+        return {
+            "ok": False,
+            "inside_WALL_INNER": False,
+            "outside_frac": 1.0,
+            "signed_gap_to_WALL_INNER_m": float("nan"),
+            "min_abs_distance_to_WALL_INNER_m": float("nan"),
+            "max_outside_penetration_m": float("nan"),
+            "reason": f"could_not_extract_WALL_INNER:{repr(e)}",
+        }
+
+    # Make sure arrays are clean.
+    good = np.all(np.isfinite(lcfs), axis=1)
+    lcfs = lcfs[good]
+
+    if lcfs.shape[0] < 20:
+        return {
+            "ok": False,
+            "inside_WALL_INNER": False,
+            "outside_frac": 1.0,
+            "signed_gap_to_WALL_INNER_m": float("nan"),
+            "min_abs_distance_to_WALL_INNER_m": float("nan"),
+            "max_outside_penetration_m": float("nan"),
+            "reason": "lcfs_has_too_few_finite_points",
+        }
+
+    path = MplPath(wall)
+
+    # Numerical tolerance only for the inside/outside classification.
+    # Keep this small. Do not use it to fake wall clearance.
+    contains_tol = float(getattr(cfg, "wall_inner_contains_tol_m", 1.0e-6))
+    inside_mask = path.contains_points(lcfs, radius=contains_tol)
+
+    d_abs, closest_wall = _distance_points_to_polyline(lcfs, wall)
+
+    if d_abs.size == 0 or not np.any(np.isfinite(d_abs)):
+        return {
+            "ok": False,
+            "inside_WALL_INNER": False,
+            "outside_frac": 1.0,
+            "signed_gap_to_WALL_INNER_m": float("nan"),
+            "min_abs_distance_to_WALL_INNER_m": float("nan"),
+            "max_outside_penetration_m": float("nan"),
+            "reason": "distance_to_WALL_INNER_failed",
+        }
+
+    # Signed distance per LCFS point:
+    #   inside  -> +distance to wall
+    #   outside -> -distance to wall
+    signed_dist = np.where(inside_mask, d_abs, -d_abs)
+
+    outside_mask = ~inside_mask
+    outside_frac = float(np.mean(outside_mask))
+    inside_all = bool(np.all(inside_mask))
+
+    # Minimum absolute wall distance, regardless of inside/outside.
+    i_min_abs = int(np.nanargmin(d_abs))
+    min_abs = float(d_abs[i_min_abs])
+
+    # signed_gap is the actual acceptance metric.
+    # If all points are inside, it is the minimum positive clearance.
+    # If at least one point is outside, it is the most negative penetration.
+    i_signed_min = int(np.nanargmin(signed_dist))
+    signed_gap = float(signed_dist[i_signed_min])
+
+    if inside_all:
+        max_outside_penetration = 0.0
+        worst_idx = i_min_abs
+    else:
+        outside_indices = np.where(outside_mask)[0]
+        outside_dist = d_abs[outside_indices]
+        j = int(np.nanargmax(outside_dist))
+        worst_idx = int(outside_indices[j])
+        max_outside_penetration = float(outside_dist[j])
+
+        # This should match signed_gap, but keep it explicit.
+        signed_gap = -max_outside_penetration
+
+    result = {
+        "ok": bool(inside_all),
+        "inside_WALL_INNER": bool(inside_all),
+        "outside_frac": float(outside_frac),
+
+        # Main wall-clearance metric for ramp-up acceptance.
+        "signed_gap_to_WALL_INNER_m": float(signed_gap),
+
+        # Auxiliary diagnostics.
+        "min_abs_distance_to_WALL_INNER_m": float(min_abs),
+        "max_outside_penetration_m": float(max_outside_penetration),
+
+        # Closest point pair, irrespective of inside/outside.
+        "closest_lcfs_point_R_m": float(lcfs[i_min_abs, 0]),
+        "closest_lcfs_point_Z_m": float(lcfs[i_min_abs, 1]),
+        "closest_wall_point_R_m": float(closest_wall[i_min_abs, 0]),
+        "closest_wall_point_Z_m": float(closest_wall[i_min_abs, 1]),
+
+        # Worst point pair. If outside, this is the deepest outside point.
+        # If fully inside, this is just the closest clearance point.
+        "worst_lcfs_point_R_m": float(lcfs[worst_idx, 0]),
+        "worst_lcfs_point_Z_m": float(lcfs[worst_idx, 1]),
+        "worst_wall_point_R_m": float(closest_wall[worst_idx, 0]),
+        "worst_wall_point_Z_m": float(closest_wall[worst_idx, 1]),
+
+        # Helpful for debugging.
+        "n_lcfs_points": int(lcfs.shape[0]),
+        "n_outside_points": int(np.sum(outside_mask)),
+    }
+
+    if inside_all:
+        result["reason"] = "lcfs_inside_WALL_INNER"
+    else:
+        result["reason"] = "lcfs_outside_WALL_INNER"
+
+    return result
 
 def plasma_diagnostics(eq: Any, geom: Dict[str, Any], shape: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Prefer:
-      1) analyze_star separatrix (R_sep/Z_sep)
-      2) analyze_star fallback_lcfs (if present)
-      3) psi-closed-contour fallback containing the axis
+    Strict plasma diagnostics.
 
-    Returns dict with ok flag + method + geometric params whenever possible.
+    Only accept a physical/usable separatrix generated by analyze_star:
+      - ok_sep=True, or
+      - has_true_separatrix=True, or
+      - has_freegs_psibndry_sep=True, or
+      - has_usable_sep=True with sep_source not being lcfs_limiter.
+
+    Do NOT infer a generic closed contour here. That old fallback could create
+    artificial internal LCFS curves when the true separatrix was open/outside.
     """
-    # 1) separatrix if present
+    sep_source = str(shape.get("sep_source", "") or "")
+    reason = str(shape.get("reason", shape.get("shape_reason", "")) or "")
+
+    is_limiter_fallback = (
+        "lcfs_limiter" in sep_source.lower()
+        or "limiter_fallback" in sep_source.lower()
+        or "lcfs_limiter" in reason.lower()
+        or "limiter_fallback" in reason.lower()
+    )
+
+    has_physical_sep = bool(
+        shape.get("ok_sep", False)
+        or shape.get("has_true_separatrix", False)
+        or shape.get("has_freegs_psibndry_sep", False)
+        or (
+            shape.get("has_usable_sep", False)
+            and not is_limiter_fallback
+        )
+    )
+
     R_sep = shape.get("R_sep", None)
     Z_sep = shape.get("Z_sep", None)
-    if R_sep is not None and Z_sep is not None:
-        try:
-            if len(R_sep) > 20 and len(Z_sep) == len(R_sep):
-                params = _plasma_params_from_curve(np.asarray(R_sep, float), np.asarray(Z_sep, float))
-                params["method"] = "analyze_star_separatrix"
-                # carry axis if analyze_star provided
-                if "R_ax" in shape and "Z_ax" in shape:
-                    try:
-                        params["R_ax"] = float(shape.get("R_ax", np.nan))
-                        params["Z_ax"] = float(shape.get("Z_ax", np.nan))
-                    except Exception:
-                        pass
-                return params
-        except Exception:
-            pass
 
-    # 2) analyze_star fallback_lcfs (if analyze_star stored it)
-    fb = shape.get("fallback_lcfs", None)
-    if isinstance(fb, dict) and ("R" in fb) and ("Z" in fb):
-        try:
-            R = np.asarray(fb["R"], float)
-            Z = np.asarray(fb["Z"], float)
-            if R.size > 20 and Z.size == R.size:
-                params = _plasma_params_from_curve(R, Z)
-                params["method"] = "analyze_star_fallback_lcfs"
-                if "R_ax" in shape and "Z_ax" in shape:
-                    try:
-                        params["R_ax"] = float(shape.get("R_ax", np.nan))
-                        params["Z_ax"] = float(shape.get("Z_ax", np.nan))
-                    except Exception:
-                        pass
-                params["R_lcfs"] = R.tolist()
-                params["Z_lcfs"] = Z.tolist()
-                return params
-        except Exception:
-            pass
+    if not has_physical_sep:
+        return {
+            "ok": False,
+            "method": "none",
+            "reason": (
+                "no_physical_separatrix"
+                if not reason else f"no_physical_separatrix:{reason}"
+            ),
+            "sep_source": sep_source or "none",
+            "has_usable_sep": bool(shape.get("has_usable_sep", False)),
+            "has_true_separatrix": bool(shape.get("has_true_separatrix", False)),
+            "has_freegs_psibndry_sep": bool(shape.get("has_freegs_psibndry_sep", False)),
+        }
 
-    # 3) psi closed contour fallback
-    nlv = int(getattr(cfg, "lcfs_fallback_nlevels", 28))
-    fb2 = _infer_lcfs_closed(eq, n_levels=nlv)
-    if fb2 is None or not fb2.get("ok", False):
-        return {"ok": False, "method": "none", "reason": "no_closed_lcfs_found"}
+    if R_sep is None or Z_sep is None:
+        return {
+            "ok": False,
+            "method": "none",
+            "reason": "physical_sep_flag_true_but_RZ_missing",
+            "sep_source": sep_source or "unknown",
+        }
 
-    R = np.asarray(fb2["R_lcfs"], float)
-    Z = np.asarray(fb2["Z_lcfs"], float)
-    params = _plasma_params_from_curve(R, Z)
-    params.update({
-        "method": str(fb2.get("method", "psi_closed_contour")),
-        "R_ax": float(fb2.get("R_ax", np.nan)),
-        "Z_ax": float(fb2.get("Z_ax", np.nan)),
-        "psi_ax": float(fb2.get("psi_ax", np.nan)),
-        "psi_level": float(fb2.get("psi_level", np.nan)),
-        "axis_tag": str(fb2.get("axis_tag", "")),
-        "R_lcfs": fb2.get("R_lcfs", None),
-        "Z_lcfs": fb2.get("Z_lcfs", None),
-    })
-    return params
+    try:
+        if len(R_sep) > 20 and len(Z_sep) == len(R_sep):
+            params = _plasma_params_from_curve(
+                np.asarray(R_sep, float),
+                np.asarray(Z_sep, float),
+            )
 
+            if not params.get("ok", False):
+                return {
+                    "ok": False,
+                    "method": "none",
+                    "reason": "bad_physical_sep_curve",
+                    "sep_source": sep_source or "unknown",
+                }
 
-def print_plasma_diagnostics(diag: Dict[str, Any]) -> None:
+            params["method"] = "analyze_star_physical_separatrix"
+            params["sep_source"] = sep_source or "analyze_star"
+            params["has_usable_sep"] = bool(shape.get("has_usable_sep", False))
+            params["has_true_separatrix"] = bool(shape.get("has_true_separatrix", False))
+            params["has_freegs_psibndry_sep"] = bool(shape.get("has_freegs_psibndry_sep", False))
+
+            if "R_ax" in shape and "Z_ax" in shape:
+                try:
+                    params["R_ax"] = float(shape.get("R_ax", np.nan))
+                    params["Z_ax"] = float(shape.get("Z_ax", np.nan))
+                except Exception:
+                    pass
+
+            return params
+    except Exception as e:
+        return {
+            "ok": False,
+            "method": "none",
+            "reason": f"exception_in_physical_sep_diag:{repr(e)}",
+            "sep_source": sep_source or "unknown",
+        }
+
+    return {
+        "ok": False,
+        "method": "none",
+        "reason": "no_valid_physical_sep_curve",
+        "sep_source": sep_source or "unknown",
+    }
+
+def print_plasma_diagnostics(diag: Dict[str, Any], shape: Optional[Dict[str, Any]] = None) -> None:
     if not diag.get("ok", False):
         print("\n[PLASMA] No LCFS diagnostic curve found.")
         if "reason" in diag:
@@ -635,6 +944,18 @@ def print_plasma_diagnostics(diag: Dict[str, Any]) -> None:
     print(f"delta_l  = {float(diag['delta_l']):.4f}")
     print(f"area     = {float(diag['area_m2']):.4f} m^2")
     print(f"bounds   = R[{float(diag['Rmin']):.4f},{float(diag['Rmax']):.4f}]  Z[{float(diag['Zmin']):.4f},{float(diag['Zmax']):.4f}]")
+    shape = shape or {}
+    wd = shape.get("wall_inner_diag", {})
+    print("\n--- LCFS / WALL_INNER containment ---")
+    print(f"inside_WALL_INNER          = {wd.get('inside_WALL_INNER', False)}")
+    print(f"outside_frac               = {wd.get('outside_frac', float('nan')):.4f}")
+    print(f"signed_gap_to_WALL_INNER   = {wd.get('signed_gap_to_WALL_INNER_m', float('nan')):.4f} m")
+    print(f"min_abs_distance_WALL_INNER= {wd.get('min_abs_distance_to_WALL_INNER_m', float('nan')):.4f} m")
+    print(f"max_outside_penetration    = {wd.get('max_outside_penetration_m', float('nan')):.4f} m")
+    print(f"reason                     = {wd.get('reason', 'unknown')}")
+
+    if not wd.get("inside_WALL_INNER", False):
+        print("[WARNING] LCFS is outside WALL_INNER. This equilibrium should NOT be accepted for ramp-up.")
 
 
 # -------------------------
@@ -1095,11 +1416,28 @@ def build_equilibrium(
 
     shape = compute_shape(eq, geom)
 
-    # NEW: Always compute plasma params from any closed LCFS that encloses the axis (even without separatrix)
+    # Strict diagnostics: only physical/usable separatrix from analyze_star.
+    # Do not infer generic closed contours here, because they can hide open/outside separatrices.
     diag = plasma_diagnostics(eq, geom, shape)
     shape["plasma_diag"] = diag
+
+    wall_diag = lcfs_wall_inner_diagnostics(shape, geom)
+    shape["wall_inner_diag"] = wall_diag
+
+    # También lo copiamos al plasma_diag para que los wrappers lo encuentren fácil.
+    if isinstance(diag, dict):
+        diag.update({
+            "inside_WALL_INNER": wall_diag.get("inside_WALL_INNER", False),
+            "outside_frac": wall_diag.get("outside_frac", 1.0),
+            "signed_gap_to_WALL_INNER_m": wall_diag.get("signed_gap_to_WALL_INNER_m", float("nan")),
+            "min_abs_distance_to_WALL_INNER_m": wall_diag.get("min_abs_distance_to_WALL_INNER_m", float("nan")),
+            "max_outside_penetration_m": wall_diag.get("max_outside_penetration_m", float("nan")),
+            "wall_check_reason": wall_diag.get("reason", "unknown"),
+        })
+        shape["plasma_diag"] = diag
+
     if verbose:
-        print_plasma_diagnostics(diag)
+        print_plasma_diagnostics(diag, shape)
 
     return eq, tokamak, geom, shape
 
@@ -1212,29 +1550,99 @@ def plot_equilibrium(eq: Any, geom: Dict[str, Any], shape: Dict[str, Any], filen
     _plot_machine_cad_overlay(ax, geom)
 
     # LCFS/separatrix from analyze_star if present.
+    # LCFS/separatrix from analyze_star only if physically usable.
     plotted = False
     R_sep = shape.get("R_sep", None)
     Z_sep = shape.get("Z_sep", None)
-    if R_sep is not None and Z_sep is not None:
+
+    sep_source = str(shape.get("sep_source", "") or "")
+    reason = str(shape.get("reason", shape.get("shape_reason", "")) or "")
+    is_limiter_fallback = (
+        "lcfs_limiter" in sep_source.lower()
+        or "limiter_fallback" in sep_source.lower()
+        or "lcfs_limiter" in reason.lower()
+        or "limiter_fallback" in reason.lower()
+    )
+
+    has_physical_sep = bool(
+        shape.get("ok_sep", False)
+        or shape.get("has_true_separatrix", False)
+        or shape.get("has_freegs_psibndry_sep", False)
+        or (
+            shape.get("has_usable_sep", False)
+            and not is_limiter_fallback
+        )
+    )
+
+    if has_physical_sep and R_sep is not None and Z_sep is not None:
         try:
             if len(R_sep) > 10 and len(Z_sep) == len(R_sep):
-                ax.plot(R_sep, Z_sep, color="tab:blue", lw=2.6, label="LCFS/Separatrix", zorder=4.0)
+                ax.plot(
+                    R_sep, Z_sep,
+                    color="tab:blue", lw=2.6,
+                    label=f"LCFS/Separatrix ({sep_source or 'physical'})",
+                    zorder=4.0,
+                )
                 plotted = True
         except Exception:
             pass
 
     # If no analyze_star separatrix, plot diagnostic LCFS fallback.
+    # Optional debug: plot rejected limiter fallback only as rejected diagnostic.
     if not plotted:
-        diag = (shape.get("plasma_diag", None) or {})
-        Rf = diag.get("R_lcfs", None)
-        Zf = diag.get("Z_lcfs", None)
+        Rf = shape.get("R_limiter_fallback", None)
+        Zf = shape.get("Z_limiter_fallback", None)
         try:
             if Rf is not None and Zf is not None and len(Rf) > 20:
                 ax.plot(
                     Rf, Zf,
-                    color="tab:blue", lw=2.2,
-                    label=f"LCFS fallback ({diag.get('method','?')})",
-                    zorder=4.0,
+                    color="0.35", lw=1.2, ls="--", alpha=0.65,
+                    label="rejected limiter fallback",
+                    zorder=3.5,
+                )
+        except Exception:
+            pass
+
+    wd = shape.get("wall_inner_diag", {})
+    if wd:
+        try:
+            ax.plot(
+                [wd["closest_lcfs_point_R_m"], wd["closest_wall_point_R_m"]],
+                [wd["closest_lcfs_point_Z_m"], wd["closest_wall_point_Z_m"]],
+                color="magenta",
+                lw=2.0,
+                ls="--",
+                label="min LCFS-wall gap",
+                zorder=10,
+            )
+
+            ax.scatter(
+                [wd["closest_lcfs_point_R_m"]],
+                [wd["closest_lcfs_point_Z_m"]],
+                color="magenta",
+                s=55,
+                marker="o",
+                zorder=11,
+            )
+
+            if not wd.get("inside_WALL_INNER", False):
+                ax.scatter(
+                    [wd["worst_lcfs_point_R_m"]],
+                    [wd["worst_lcfs_point_Z_m"]],
+                    color="red",
+                    s=80,
+                    marker="X",
+                    label="LCFS outside WALL_INNER",
+                    zorder=12,
+                )
+                ax.plot(
+                    [wd["worst_lcfs_point_R_m"], wd["worst_wall_point_R_m"]],
+                    [wd["worst_lcfs_point_Z_m"], wd["worst_wall_point_Z_m"]],
+                    color="red",
+                    lw=2.0,
+                    ls="--",
+                    label="max outside penetration",
+                    zorder=12,
                 )
         except Exception:
             pass
