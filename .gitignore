@@ -99,5 +99,5 @@ Thumbs.db
 pyscripts/results
 
 pyscripts/results/fit_simplified_dn_toposafe_results.jsonl
-
+pyscripts/results/fit_simplified_dn_toposafe_results.json
 results/Current_4MA
